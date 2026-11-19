@@ -31,10 +31,13 @@ from okxquant.config import Credentials
 from okxquant.errors import CredentialError, NetworkError
 from okxquant.exchange.rest import DEFAULT_DOMAIN
 
-PUBLIC_WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
-PRIVATE_WS_URL = "wss://ws.okx.com:8443/ws/v5/private"
-DEMO_PUBLIC_WS_URL = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
-DEMO_PRIVATE_WS_URL = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+# 8443 端口已被 OKX 公告退役（notice 64010: migrate to port 443），统一用 443。
+# 行情走 business 端点：K 线频道（candle*）归属 business，
+# 在 public 端点上订阅会返回 60018（channel doesn't exist）。
+PUBLIC_WS_URL = "wss://ws.okx.com/ws/v5/business"
+PRIVATE_WS_URL = "wss://ws.okx.com/ws/v5/private"
+DEMO_PUBLIC_WS_URL = "wss://wspap.okx.com/ws/v5/business"
+DEMO_PRIVATE_WS_URL = "wss://wspap.okx.com/ws/v5/private"
 
 RECONNECT_MIN_SEC = 1.0
 RECONNECT_MAX_SEC = 30.0
@@ -53,7 +56,7 @@ class WsEvent:
 
 
 def ws_urls(*, demo: bool) -> tuple[str, str]:
-    """返回 (公有地址, 私有地址)。模拟盘走 wspap 域名。"""
+    """返回 (行情地址, 私有地址)。模拟盘走 wspap 域名。"""
     if demo:
         return DEMO_PUBLIC_WS_URL, DEMO_PRIVATE_WS_URL
     return PUBLIC_WS_URL, PRIVATE_WS_URL
@@ -107,12 +110,17 @@ class WsBridge:
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
         loop = self._loop
-        if loop is not None and loop.is_running():
+        if loop is not None:
+            # 关闭连接会让消费循环退出、事件循环随之结束，
+            # 因此 is_running() 与 call_soon_threadsafe() 之间存在竞争，统一兜住。
             try:
-                asyncio.run_coroutine_threadsafe(self._close_client(), loop).result(timeout=timeout)
-            except Exception:
-                logger.debug("关闭 WS 客户端时出现异常（可忽略）")
-            loop.call_soon_threadsafe(loop.stop)
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._close_client(), loop
+                    ).result(timeout=timeout)
+                    loop.call_soon_threadsafe(loop.stop)
+            except (RuntimeError, TimeoutError):
+                logger.debug("WS 事件循环已结束，跳过优雅停止")
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
@@ -260,6 +268,16 @@ class WsBridge:
             return
 
         self._messages += 1
+        if self._messages <= 10:
+            data = payload.get("data") or []
+            logger.debug(
+                "WS 收到第 {} 条消息：channel={} frames={} 首帧={}",
+                self._messages,
+                channel,
+                len(data),
+                str(data[0])[:120] if data else "-",
+            )
+
         item = WsEvent(
             channel=channel,
             action=str(payload.get("action", "")),
@@ -277,18 +295,24 @@ class WsBridge:
 
 
 def public_subscriptions(inst_id: str, bar: str) -> list[dict[str, str]]:
-    """公有频道：K 线与 ticker。"""
-    return [
-        {"channel": f"candle{bar}", "instId": inst_id},
-        {"channel": "ticker", "instId": inst_id},
-    ]
+    """行情频道：只订阅 K 线。
+
+    OKX 的 ``ticker`` / ``tickers`` 在 public 与 business 端点都返回 60018，
+    而 K 线推送的收盘价足以驱动策略与面板，故不再单独订阅 ticker。
+    24 小时涨跌幅改由 REST 一次性获取。
+    """
+    return [{"channel": f"candle{bar}", "instId": inst_id}]
 
 
-def private_subscriptions(inst_id: str) -> list[dict[str, str]]:
-    """私有频道：订单与账户。"""
+def private_subscriptions() -> list[dict[str, str]]:
+    """私有频道：订单与账户。
+
+    ``orders`` 只接受 ``instType``（SPOT），传 ``instId`` 会返回 60018；
+    ``account`` 不接收任何过滤参数。
+    """
     return [
-        {"channel": "orders", "instId": inst_id},
-        {"channel": "account", "instId": inst_id},
+        {"channel": "orders", "instType": "SPOT"},
+        {"channel": "account"},
     ]
 
 

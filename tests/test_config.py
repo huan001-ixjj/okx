@@ -51,12 +51,16 @@ def test_bar_to_ms() -> None:
 
 
 def test_credentials_missing_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 屏蔽 .env 加载：否则工作目录里存在 .env 时，凭据会被重新读进来，
+    # 结果取决于运行环境而不是被测逻辑。
+    monkeypatch.setattr("okxquant.config.load_dotenv", lambda **_: None)
     for name in ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"):
         monkeypatch.delenv(name, raising=False)
     assert load_credentials() is None
 
 
 def test_credentials_required_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("okxquant.config.load_dotenv", lambda **_: None)
     for name in ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ConfigError, match="缺少 API 凭据"):

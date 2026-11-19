@@ -20,6 +20,7 @@
 - [风控规则](#风控规则)
 - [数据与目录](#数据与目录)
 - [安全边界](#安全边界)
+- [远程部署与验证](#远程部署与验证)
 - [已知限制](#已知限制)
 - [风险声明](#风险声明)
 
@@ -42,7 +43,9 @@
 
 - **Python 3.12**（`python-okx` 官方声明支持到 3.12；更高版本未验证）
 - [uv](https://docs.astral.sh/uv/) 用于管理解释器与虚拟环境
-- 能访问 `https://www.okx.com` 与 `wss://ws.okx.com:8443`（模拟盘为 `wss://wspap.okx.com:8443`）
+- 能**直接**访问 `https://www.okx.com` 与 `wss://ws.okx.com`（模拟盘为 `wss://wspap.okx.com`）
+- 本工具**不内置任何网络代理**。如果所在网络无法直连交易所，请把它部署到能直连的服务器上运行，
+  见[远程部署与验证](#远程部署与验证)
 
 ## 安装
 
@@ -340,9 +343,96 @@ logs/              按天轮转的日志
 4. 启动横幅明确打印当前环境；实盘会额外打印红色警告。
 5. 密钥只从环境变量读取，日志对 key/passphrase/签名打码。
 
+## 远程部署与验证
+
+本地网络可能无法直连交易所。此时把项目部署到一台能直连的服务器上运行即可——**本工具不需要任何代理**。
+
+### 前置条件
+
+服务器需要：Python 3.12、能访问 `https://www.okx.com` 与 `wss://ws.okx.com`、能访问 PyPI。
+
+### 本地准备
+
+在 `.env` 中填写部署目标（**只被 `scripts/deploy_remote.sh` 读取**，程序运行时不读）：
+
+```dotenv
+DEPLOY_SSH_HOST=user@your-server
+DEPLOY_SSH_PORT=22
+DEPLOY_SSH_PASSWORD=你的登录密码
+```
+
+### 部署
+
+```bash
+bash scripts/deploy_remote.sh                  # 上传 + 建 venv + 装依赖 + 跑测试
+bash scripts/deploy_remote.sh --only-tests     # 只跑远程 pytest 与 ruff
+bash scripts/deploy_remote.sh --skip-install   # 只上传，不重装依赖
+bash scripts/deploy_remote.sh --clean          # 删除远程 .venv 与运行数据
+```
+
+上传时排除 `.venv`、`.env`、`data`、`logs`、`.git` 与各类缓存，**本地密钥不会离开本机**。
+
+### 在服务器上配置密钥
+
+首次部署会在远程生成只含 `OKX_FLAG=1` 的 `.env`（权限 600）。填入模拟盘密钥：
+
+```bash
+ssh user@your-server
+cd ~/okxquant
+cat > .env <<'EOF'
+OKX_API_KEY=...
+OKX_API_SECRET=...
+OKX_PASSPHRASE=...
+OKX_FLAG=1
+EOF
+chmod 600 .env
+```
+
+重复执行部署脚本不会覆盖已存在的 `.env`。
+
+### 验证清单
+
+```bash
+cd ~/okxquant
+.venv/bin/pytest -q                                  # 单元测试
+.venv/bin/ruff check .                               # 代码检查
+.venv/bin/okxquant info                              # 应显示 SIMULATED TRADING
+.venv/bin/okxquant download --days 1                 # 真实 K 线落库
+.venv/bin/okxquant backtest --days 1                 # 真实数据回测
+.venv/bin/python scripts/ws_probe.py --matrix         # WS 端点自检
+.venv/bin/python scripts/smoke_order.py --quote 20   # 下单链路冒烟（最小金额）
+.venv/bin/okxquant live --dry-run                    # 实时行情，Ctrl-C 退出
+```
+
+### 已验证 / 未验证
+
+| 环节 | 状态 |
+| --- | --- |
+| 历史 K 线下载（真实数据） | ✅ 已验证 |
+| 回测（真实数据） | ✅ 已验证 |
+| 公有 WS 行情（K 线推送） | ✅ 已验证 |
+| 私有 WS（订单 / 账户频道） | ✅ 已验证 |
+| 模拟盘下单 / 查询 / 撤单 / 平仓 | ✅ 已验证（`scripts/smoke_order.py`） |
+| `live` 自动交易（策略触发下单） | ⚠️ 未验证——需策略在真实行情下产生信号 |
+| 实盘交易 | ❌ 不支持，需要额外改造 |
+
+### 关于 WS 端点
+
+OKX 已公告 `:8443` 端口退役（`notice code=64010`），本项目统一使用 443：
+
+| 频道 | 端点 |
+| --- | --- |
+| K 线（`candle*`） | `wss://ws.okx.com/ws/v5/business`（模拟盘 `wspap.okx.com`） |
+| 私有（`orders` / `account`） | `wss://ws.okx.com/ws/v5/private` |
+
+`ticker` / `tickers` 频道在 public 与 business 端点均返回 `60018`，因此不再订阅：
+面板最新价取自 K 线收盘价，24 小时涨跌幅在启动时通过 REST 获取一次。
+
 ## 已知限制
 
 - **回测撮合是简化的**：不含订单簿深度、不含部分成交、不含挂单排队，限价单只在触价当根成交。
+- **现货市价单必须显式指定 `tgtCcy`**：不传时 OKX 会把 `sz` 当作计价币金额，
+  容易触发 `51020`（低于最小下单额）。代码已在 `OkxRest.place_order` 内部处理。
 - **实盘账本以本地为准**：启动时用交易所余额校准 USDT/BTC 数量，但持仓成本用当前价近似（交易所不返回现货成本），因此盈亏统计在带仓启动时会有偏差。
 - **私有 WS 成交回报的增量拆分**：部分成交时按累计均价拆增量，单价存在小额误差。
 - **`python-okx` 私有 WS 订阅内部固定等待 5 秒**，启动时会有约 5 秒延迟才收到订单推送。

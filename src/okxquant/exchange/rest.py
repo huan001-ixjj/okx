@@ -339,6 +339,7 @@ class OkxRest:
         px: str | None = None,
         cl_ord_id: str = "",
         td_mode: str = "cash",
+        tgt_ccy: str = "base_ccy",
     ) -> Order:
         self._ensure_private()
         params: dict[str, Any] = {
@@ -351,6 +352,10 @@ class OkxRest:
         }
         if px is not None:
             params["px"] = px
+        if ord_type is OrderType.MARKET:
+            # 现货市价单必须显式指定 tgtCcy：不传时 sz 会被当作计价币金额，
+            # 例如 sz=0.001 即 0.001 USDT，从而触发 51020（低于最小下单额）。
+            params["tgtCcy"] = tgt_ccy
 
         resp = self._call(self._trade.place_order, endpoint="/api/v5/trade/order", **params)
         data = (resp.get("data") or [{}])[0]

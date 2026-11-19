@@ -110,6 +110,7 @@ class LiveEngine:
     def run(self) -> None:
         self._install_signals()
         self._print_banner()
+        self._prime_market()
         self._sync_account()
         self._reconcile()
         self._start_ws()
@@ -171,6 +172,9 @@ class LiveEngine:
             status=status,
         )
 
+        public_stats = self._public_ws.stats if self._public_ws else {}
+        private_stats = self._private_ws.stats if self._private_ws else {}
+
         self.console.print()
         self.console.print(
             f"[bold]本轮结束[/] 成交 {len(self.portfolio.fills)} 笔 · "
@@ -179,12 +183,38 @@ class LiveEngine:
             f"手续费 {self.portfolio.fee_paid:.2f} · "
             f"策略重载 {self.state.reloads} 次"
         )
+        self.console.print(
+            f"[dim]行情：K 线 {self.state.bars_processed} 根 · "
+            f"最新价 {self.state.last_price:,.2f} · "
+            f"公有推送 {public_stats.get('messages', 0)} 条"
+            f"（丢弃 {public_stats.get('dropped', 0)}） · "
+            f"私有推送 {private_stats.get('messages', 0)} 条[/]"
+        )
         if self.risk.halted:
             self.console.print(f"[bold red]熔断未解除：{self.risk.halt_reason}[/]")
 
     # ------------------------------------------------------------------ #
     # 启动准备
     # ------------------------------------------------------------------ #
+    def _prime_market(self) -> None:
+        """WS 只订阅 K 线（ticker 频道已不可用），启动时用 REST 补一次最新价。
+
+        之后的价格由每根 K 线推送的收盘价持续更新，足够驱动面板与策略。
+        """
+        if self.rest is None:
+            return
+        try:
+            ticker = self.rest.ticker(self.cfg.market.inst_id)
+        except Exception as exc:
+            logger.debug("启动时获取行情失败（不影响后续 K 线推送）：{}", exc)
+            return
+
+        if ticker.last > 0:
+            self.state.last_price = ticker.last
+            self.state.change_pct = ticker.change_pct_24h
+            if self.portfolio.last_price <= 0:
+                self.portfolio.last_price = ticker.last
+
     def _sync_account(self) -> None:
         """实盘模式下用交易所余额校准本地账本，避免带着旧状态下单。"""
         if self.rest is None or self.credentials is None or self.dry_run:
@@ -256,7 +286,7 @@ class LiveEngine:
         if self.credentials is not None:
             self._private_ws = WsBridge(
                 url=priv_url,
-                subscriptions=private_subscriptions(inst_id),
+                subscriptions=private_subscriptions(),
                 credentials=self.credentials,
                 private=True,
                 queue_obj=self._queue,

@@ -1,0 +1,13 @@
+# 内置 ma_cross 策略参数
+# 命令行 --param key=value 可覆盖这里的值
+
+# 快线周期（根）
+fast = 12
+# 慢线周期（根），必须大于 fast
+slow = 48
+# 金叉时投入可用现金的比例
+size_pct = 0.95
+# ATR 周期
+atr_period = 14
+# 追踪止损宽度（ATR 倍数），设为 0 关闭止损
+atr_stop_mult = 2.5

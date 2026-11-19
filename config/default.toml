@@ -1,0 +1,60 @@
+# okxquant 全局配置
+# 密钥不写在这里，一律来自 .env 或环境变量。
+
+[market]
+inst_id = "BTC-USDT"
+bar = "1m"
+
+[storage]
+db_path = "data/quant.db"
+
+[logging]
+level = "INFO"
+dir = "logs"
+retention_days = 14
+
+[execution]
+# 回测用的手续费率（BTC-USDT 现货吃单约 0.08%~0.1%）
+fee_rate = 0.0008
+# 回测滑点，单位基点（1bp = 0.01%）
+slippage_bps = 2.0
+# 回测初始资金（USDT）
+initial_cash = 10000.0
+
+[risk]
+# 单笔下单最大名义金额（USDT）
+max_order_notional = 500.0
+# 持仓市值占权益上限
+max_position_ratio = 0.8
+# 日内最大亏损（USDT），超过即熔断
+max_daily_loss = 300.0
+# 交易所最小下单名义金额（USDT）
+min_order_notional = 10.0
+# 两次下单之间的最小间隔（秒）
+order_cooldown_sec = 5.0
+# 单日最大下单次数
+max_orders_per_day = 200
+# 是否允许连接实盘，false 时 flag=0 会被拒绝
+allow_live = false
+
+[render]
+# 回测时权益曲线采样间隔（每 N 根 bar 记录一次）
+equity_sample_bars = 60
+# 是否使用彩色输出，false 等价于 NO_COLOR
+color = true
+
+[strategy]
+name = "ma_cross"
+# 策略参数覆盖，留空则使用 config/strategies/<name>.toml
+params = {}
+
+[network]
+# 网络出口。默认全部留空 = 直连，部署到能直接访问 OKX 的服务器时无需改动。
+# 显式代理（优先级最高），例如 socks5h://127.0.0.1:7890
+proxy = ""
+# SSH 隧道：仅用于无法直连 OKX 的开发机，密码在 .env 的 OKX_TUNNEL_PASSWORD
+tunnel_enabled = false
+tunnel_host = ""
+tunnel_port = 1080
+tunnel_ssh_port = 22
+tunnel_timeout_sec = 20.0

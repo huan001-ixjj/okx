@@ -144,7 +144,7 @@ uv run okxquant backtest --strategy grid --days 3 \
   --param lower=55000 --param upper=65000 --param grids=20
 
 # 用自定义策略文件
-uv run okxquant backtest --strategy strategies/ma_cross.py --days 7
+uv run okxquant backtest --strategy strategies/bollinger_reversion.py --days 7
 
 # 调整成本假设并启用风控（默认关闭，只评估策略本身）
 uv run okxquant backtest --days 7 --fee 0.001 --slippage 5 --risk
@@ -177,7 +177,7 @@ uv run okxquant report show 3
 uv run okxquant live --dry-run
 
 # 真实向模拟盘下单
-uv run okxquant live --strategy strategies/ma_cross.py
+uv run okxquant live --strategy strategies/bollinger_reversion.py
 
 # 覆盖参数
 uv run okxquant live -s grid -p lower=55000 -p upper=65000 -p qty_per_grid=0.001
@@ -193,7 +193,7 @@ uv run okxquant live -s grid -p lower=55000 -p upper=65000 -p qty_per_grid=0.001
 
 ```bash
 uv run okxquant strategy list
-uv run okxquant strategy check strategies/ma_cross.py
+uv run okxquant strategy check strategies/bollinger_reversion.py
 ```
 
 ---
@@ -316,7 +316,7 @@ win = Window(100);      win.push(price); win.values    # 定长滑窗
 
 ```
 config/            配置（default.toml、策略参数）
-strategies/        自定义策略 .py（示例：ma_cross.py、grid.py）
+strategies/        自定义策略 .py（当前保留：bollinger_reversion.py）
 data/quant.db      SQLite：K 线、runs、订单、成交、权益曲线、风控事件
 logs/              按天轮转的日志
 ```
@@ -346,6 +346,8 @@ logs/              按天轮转的日志
 ## 远程部署与验证
 
 本地网络可能无法直连交易所。此时把项目部署到一台能直连的服务器上运行即可——**本工具不需要任何代理**。
+
+两种落地方式：用 [Render 托管](#render-托管部署需常驻容器)（仓库里已有 `render.yaml`），或者用自己的服务器（下面的 SSH 脚本）。
 
 ### 前置条件
 
@@ -427,6 +429,59 @@ OKX 已公告 `:8443` 端口退役（`notice code=64010`），本项目统一使
 
 `ticker` / `tickers` 频道在 public 与 business 端点均返回 `60018`，因此不再订阅：
 面板最新价取自 K 线收盘价，24 小时涨跌幅在启动时通过 REST 获取一次。
+
+### Render 托管部署（需常驻容器）
+
+`render.yaml` 已经描述好整台服务：一个常驻 Web Service，`uvicorn okxquant.web:app`
+起在 `$PORT`，交易引擎作为子进程由它托管，Web 与引擎共用同一个**外部 Postgres**（不挂持久盘）。
+
+1. 仓库推到 GitHub，Render 控制台 → **New → Blueprint** → 选中该仓库。
+2. Environment 里填：
+   - `OKX_DB_PATH`：Postgres 连接串，形如 `postgresql://user:pass@host/db?sslmode=require`
+   - `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_PASSPHRASE`（模拟盘密钥）
+   - OKX 后台把该 Key 的 **IP 白名单留空**，否则 Render 的动态出口 IP 会被拒（`50110`）
+3. 部署完成后打开服务域名就是看板首页，也可以直接验接口：
+
+```bash
+curl -s https://<服务域名>/health    # engine_running=true，且 engine.blocked 为空
+curl -s https://<服务域名>/status    # 最新一次 live 运行的权益与指标
+curl -s https://<服务域名>/logs      # 引擎日志尾部
+```
+
+### Web 看板
+
+`GET /` 返回一个单文件看板（`src/okxquant/static/index.html`，无构建步骤、无外部依赖）：
+引擎状态、最新运行指标、权益曲线、成交明细、订单列表、日志尾部，
+每 5 秒轮询一次，可关闭自动刷新。
+
+**看板是纯只读的**：页面上没有任何启停、下单、撤单入口，只有刷新；
+所有操作类动作都留给服务端托管（`AUTOSTART_ENGINE` + 看护线程）和命令行。
+
+背后的 JSON 接口：
+
+| 接口 | 内容 |
+| --- | --- |
+| `GET /health` | 存活探针 + 引擎进程状态（pid / 重启次数 / 阻塞原因） |
+| `GET /status` | 环境、交易对、引擎状态、最新 live 运行（运行中会用最新采样点推算权益与收益） |
+| `GET /trades?limit=50` | 最近成交 |
+| `GET /equity?limit=300` | 权益曲线采样点 |
+| `GET /orders?limit=30` | 最近订单 |
+| `GET /logs?limit=40` | 引擎日志尾部 |
+
+> `POST /engine/start` · `POST /engine/stop` 这两个端点仍保留给运维用（看板不调用它们）。
+> 它们没有鉴权，服务暴露在公网时建议直接删掉或用反向代理加访问控制。
+
+部署形态的约束：
+
+| 事项 | 说明 |
+| --- | --- |
+| 必须常驻 | 引擎是长连接子进程，Vercel / Cloudflare 这类 serverless 平台跑不了 |
+| 存储 | 全部落在外部 Postgres（Neon / Supabase / Render Postgres 均可），容器重启不丢数据；首次连接自动建表 |
+| 连接池 | 用 Neon 直连串即可；Supabase / pgBouncer 的事务池化模式也兼容（代码已关闭自动 prepared statement） |
+| 断线 | 空闲连接被云数据库掐断后，下一次访问会自动重连（日志里会有「正在重连」） |
+| 区域 | 默认 `singapore`。OKX 对部分云厂商 IP 有限制，引擎反复退出时先看 `/logs` |
+| 引擎自愈 | 子进程异常退出按 5→60s 退避自动重拉，上限 `OKX_MAX_RESTARTS`（默认 10 次）；缺凭据时不会空转，原因写在 `/health` 的 `engine.blocked` |
+| free plan | 15 分钟无请求会休眠，引擎跟着睡。必须用 UptimeRobot 之类每 5 分钟 ping `/health` |
 
 ## 已知限制
 

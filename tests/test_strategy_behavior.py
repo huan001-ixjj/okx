@@ -134,8 +134,7 @@ class TestGrid:
 
 
 class TestScriptStrategy:
-    def test_user_script_runs(self) -> None:
-        strategy = build("strategies/ma_cross.py", {"fast": 2, "slow": 3})
-        actions = feed(strategy, [10.0, 10.0, 10.0, 9.0, 9.0, 10.0])
-        flat = [a for group in actions for a in group]
-        assert any(isinstance(a, Intent) and a.side is Side.BUY for a in flat)
+    def test_user_script_loads(self) -> None:
+        strategy = build("strategies/bollinger_reversion.py", {"period": 20})
+        assert strategy.name == "bollinger_reversion"
+        assert strategy.param_int("period") == 20

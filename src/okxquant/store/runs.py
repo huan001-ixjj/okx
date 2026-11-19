@@ -22,25 +22,31 @@ def create_run(
     initial_equity: float | None = None,
     status: str = "running",
 ) -> int:
+    sql = (
+        "INSERT INTO runs (kind, status, strategy, inst_id, bar, start_ts, end_ts, "
+        "started_at, initial_equity, params_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    params = (
+        kind,
+        status,
+        strategy,
+        inst_id,
+        bar,
+        start_ts,
+        end_ts,
+        int(time.time() * 1000),
+        initial_equity,
+        json.dumps(params or {}, ensure_ascii=False),
+    )
     with db.transaction() as conn:
-        cursor = conn.execute(
-            "INSERT INTO runs (kind, status, strategy, inst_id, bar, start_ts, end_ts, "
-            "started_at, initial_equity, params_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                kind,
-                status,
-                strategy,
-                inst_id,
-                bar,
-                start_ts,
-                end_ts,
-                int(time.time() * 1000),
-                initial_equity,
-                json.dumps(params or {}, ensure_ascii=False),
-            ),
-        )
-        run_id = cursor.lastrowid
+        if db.backend == "postgres":
+            # Postgres 没有 lastrowid，用 RETURNING 取自增主键
+            cursor = conn.execute(sql + " RETURNING run_id", params)
+            run_id = cursor.fetchone()["run_id"]
+        else:
+            cursor = conn.execute(sql, params)
+            run_id = cursor.lastrowid
     assert run_id is not None
     return int(run_id)
 

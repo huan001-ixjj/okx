@@ -221,7 +221,6 @@ class LiveEngine:
             return
         try:
             usdt = self.rest.available_balance("USDT")
-            btc = self.rest.available_balance("BTC")
         except Exception as exc:
             logger.warning("读取账户余额失败，沿用本地账本：{}", exc)
             return
@@ -233,10 +232,29 @@ class LiveEngine:
                 price = self.rest.ticker(self.cfg.market.inst_id).last
             except Exception:
                 price = 0.0
-        self.portfolio.position.qty = btc
-        # 交易所不返回持仓成本，用当前价近似，仅用于展示与止损参考
-        self.portfolio.position.avg_cost = price if btc > 0 else 0.0
-        logger.info("已按交易所余额校准：USDT {:.2f} / BTC {:.8f}", usdt, btc)
+
+        inst = self.cfg.market.inst_id
+        base = inst.split("-")[0]
+        try:
+            if inst.endswith("-SWAP"):
+                # 合约持仓不在 balance 里，必须查 positions
+                qty, avg_cost = self.rest.swap_position(inst)
+            else:
+                qty = self.rest.available_balance(base)
+                avg_cost = price if qty > 0 else 0.0
+        except Exception as exc:
+            logger.warning("读取持仓失败，沿用本地账本：{}", exc)
+            return
+
+        self.portfolio.position.qty = qty
+        self.portfolio.position.avg_cost = avg_cost
+        logger.info(
+            "已按交易所校准：USDT {:.2f} / {} {:.8f} @ {:.4f}",
+            usdt,
+            base,
+            qty,
+            avg_cost,
+        )
 
     def _reconcile(self) -> None:
         local_open = trading.open_orders(self.db, self.run_id)
@@ -401,6 +419,7 @@ class LiveEngine:
                 notional=notional,
                 snapshot=snapshot,
                 now_ms=candle.ts,
+                allow_short=action.allow_short,
             )
             if not decision.allowed:
                 self.state.push_event(f"[yellow]风控拒绝[/] {decision.reason}")

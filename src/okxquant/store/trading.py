@@ -22,8 +22,9 @@ ON CONFLICT(run_id, cl_ord_id) DO UPDATE SET
 """
 
 FILL_INSERT = """
-INSERT OR IGNORE INTO fills (run_id, ts, side, qty, px, fee, cl_ord_id, ord_id)
+INSERT INTO fills (run_id, ts, side, qty, px, fee, cl_ord_id, ord_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id, ord_id, ts, qty, px) DO NOTHING
 """
 
 EQUITY_UPSERT = """
@@ -127,8 +128,9 @@ def _row_to_order(row) -> Order:  # type: ignore[no-untyped-def]
 
 
 def load_orders(db: Database, run_id: int, *, limit: int = 500) -> list[Order]:
+    # 不用 rowid：orders 表在 Postgres 后端没有 rowid
     rows = db.execute(
-        "SELECT * FROM orders WHERE run_id=? ORDER BY created_ts DESC, rowid DESC LIMIT ?",
+        "SELECT * FROM orders WHERE run_id=? ORDER BY created_ts DESC, cl_ord_id DESC LIMIT ?",
         (run_id, limit),
     ).fetchall()
     return [_row_to_order(r) for r in rows]
@@ -143,28 +145,36 @@ def open_orders(db: Database, run_id: int) -> list[Order]:
     return [_row_to_order(r) for r in rows]
 
 
+def _row_to_fill(row) -> Fill:  # type: ignore[no-untyped-def]
+    try:
+        side = Side(row["side"])
+    except ValueError:
+        side = Side.BUY
+    return Fill(
+        ts=int(row["ts"]),
+        side=side,
+        qty=float(row["qty"]),
+        px=float(row["px"]),
+        fee=float(row["fee"]),
+        cl_ord_id=str(row["cl_ord_id"]),
+        ord_id=str(row["ord_id"]),
+    )
+
+
 def load_fills(db: Database, run_id: int, *, limit: int = 1000) -> list[Fill]:
     rows = db.execute(
         "SELECT * FROM fills WHERE run_id=? ORDER BY ts ASC LIMIT ?", (run_id, limit)
     ).fetchall()
-    fills: list[Fill] = []
-    for row in rows:
-        try:
-            side = Side(row["side"])
-        except ValueError:
-            side = Side.BUY
-        fills.append(
-            Fill(
-                ts=int(row["ts"]),
-                side=side,
-                qty=float(row["qty"]),
-                px=float(row["px"]),
-                fee=float(row["fee"]),
-                cl_ord_id=str(row["cl_ord_id"]),
-                ord_id=str(row["ord_id"]),
-            )
-        )
-    return fills
+    return [_row_to_fill(r) for r in rows]
+
+
+def recent_fills(db: Database, run_id: int, *, limit: int = 50) -> list[Fill]:
+    """最近 N 笔成交，返回时仍按时间升序，便于表格自上而下阅读。"""
+    rows = db.execute(
+        "SELECT * FROM fills WHERE run_id=? ORDER BY ts DESC, cl_ord_id DESC LIMIT ?",
+        (run_id, limit),
+    ).fetchall()
+    return [_row_to_fill(r) for r in reversed(rows)]
 
 
 def load_equity(db: Database, run_id: int) -> list[EquityPoint]:
@@ -212,5 +222,7 @@ def load_risk_events(db: Database, run_id: int) -> list[dict[str, object]]:
 
 
 def count_fills(db: Database, run_id: int) -> int:
-    row = db.execute("SELECT COUNT(*) FROM fills WHERE run_id=?", (run_id,)).fetchone()
-    return int(row[0]) if row else 0
+    row = db.execute(
+        "SELECT COUNT(*) AS n FROM fills WHERE run_id=?", (run_id,)
+    ).fetchone()
+    return int(row["n"]) if row else 0

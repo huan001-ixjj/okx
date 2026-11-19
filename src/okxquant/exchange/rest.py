@@ -218,9 +218,11 @@ class OkxRest:
         return server - local
 
     def instrument(self, inst_id: str) -> Instrument:
+        # 按 instType 自适应：XRP-USDT-SWAP 走 SWAP，否则 SPOT。
+        # 之前写死 SPOT 导致合约启动时拿不到精度、只能用默认值。
         resp = self._call(
             self._public.get_instruments,
-            "SPOT",
+            self._inst_type(inst_id),
             instId=inst_id,
             endpoint="/api/v5/public/instruments",
             throttle=False,
@@ -230,6 +232,30 @@ class OkxRest:
         if not data:
             raise ApiError(f"找不到交易对 {inst_id}", endpoint="/api/v5/public/instruments")
         return parse_instrument(data[0])
+
+    def swap_spec(self, inst_id: str) -> dict[str, float]:
+        """查询永续合约的「张」参数：面值、最小张数、步长与价格精度。
+
+        现货的 ``instrument()`` 走 ``instType=SPOT``，查不到 SWAP，必须单独走这里。
+        """
+        resp = self._call(
+            self._public.get_instruments,
+            instType="SWAP",
+            instId=inst_id,
+            endpoint="/api/v5/public/instruments",
+            throttle=False,
+            retries=1,
+        )
+        data = resp.get("data") or []
+        if not data:
+            raise ApiError(f"找不到合约 {inst_id}", endpoint="/api/v5/public/instruments")
+        item = data[0]
+        return {
+            "ct_val": float(item["ctVal"]),
+            "min_sz": float(item["minSz"]),
+            "lot_sz": float(item["lotSz"]),
+            "tick_sz": float(item["tickSz"]),
+        }
 
     def ticker(self, inst_id: str) -> Ticker:
         resp = self._call(
@@ -329,6 +355,30 @@ class OkxRest:
         avail, _ = parse_balance(resp.get("data") or [], ccy)
         return avail
 
+    def swap_position(self, inst_id: str) -> tuple[float, float]:
+        """返回永续合约持仓的 (币数量, 开仓均价)。
+
+        合约持仓不在 balance 里，必须走 ``/api/v5/account/positions``；
+        数值用「币数量」表示（张数 × ctVal），负数表示空头。
+        """
+        self._ensure_private()
+        resp = self._call(
+            self._account.get_positions,
+            instType="SWAP",
+            instId=inst_id,
+            endpoint="/api/v5/account/positions",
+            throttle=False,
+        )
+        data = resp.get("data") or []
+        if not data:
+            return 0.0, 0.0
+        row = data[0]
+        contracts = as_float(row.get("pos"))
+        if abs(contracts) < 1e-12:
+            return 0.0, 0.0
+        spec = self.swap_spec(inst_id)
+        return contracts * spec["ct_val"], as_float(row.get("avgPx"))
+
     def place_order(
         self,
         *,
@@ -400,11 +450,20 @@ class OkxRest:
             )
         return str(data.get("ordId", ord_id))
 
+    @staticmethod
+    def _inst_type(inst_id: str) -> str:
+        """永续合约的 instType 是 SWAP，其余按 SPOT 处理。
+
+        写死 SPOT 会得到 51000（Instrument ID doesn't match instrument type），
+        导致实盘启动时对账直接失败。
+        """
+        return "SWAP" if inst_id.endswith("-SWAP") else "SPOT"
+
     def pending_orders(self, inst_id: str) -> list[Order]:
         self._ensure_private()
         resp = self._call(
             self._trade.get_order_list,
-            instType="SPOT",
+            instType=self._inst_type(inst_id),
             instId=inst_id,
             state="live",
             limit="100",
@@ -417,7 +476,7 @@ class OkxRest:
         self._ensure_private()
         resp = self._call(
             self._trade.get_fills,
-            instType="SPOT",
+            instType=self._inst_type(inst_id),
             instId=inst_id,
             limit=str(limit),
             endpoint="/api/v5/trade/fills",

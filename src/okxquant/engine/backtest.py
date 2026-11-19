@@ -66,11 +66,17 @@ def _fill_from_intent(
 
     qty = intent.quote_qty / px if intent.quote_qty is not None else (intent.qty or 0.0)
 
+    # 用购买力（现金 × 杠杆）校验可负担数量，否则杠杆会被撮合层抵消
+    affordable = portfolio.buying_power / (px * (1 + fee_rate))
+
     if intent.side.sign > 0:
-        affordable = portfolio.cash / (px * (1 + fee_rate))
+        qty = min(qty, max(0.0, affordable))
+    elif intent.allow_short:
+        # 合约语义：允许卖出超过当前持仓，形成空头
         qty = min(qty, max(0.0, affordable))
     else:
-        qty = min(qty, portfolio.position.qty)
+        # 现货语义：只平多，超出持仓部分截断
+        qty = min(qty, max(0.0, portfolio.position.qty))
 
     if qty <= 0:
         return None
@@ -95,6 +101,7 @@ def run_backtest(
     risk: RiskEngine | None = None,
     on_progress: Callable[[int], None] | None = None,
     params: dict | None = None,
+    leverage: float = 1.0,
 ) -> BacktestResult:
     """遍历区间内所有已收盘 K 线，逐根调用策略并撮合成交。"""
     run_id = runs.create_run(
@@ -109,7 +116,7 @@ def run_backtest(
         initial_equity=initial_cash,
     )
 
-    portfolio = Portfolio(inst_id, initial_cash)
+    portfolio = Portfolio(inst_id, initial_cash, leverage=leverage)
     fills: list[Fill] = []
     sampled: list[EquityPoint] = []
     risk_events: list[str] = []
@@ -143,6 +150,7 @@ def run_backtest(
                         notional=_intent_notional(action, candle.close),
                         snapshot=snapshot,
                         now_ms=candle.ts,
+                        allow_short=action.allow_short,
                     )
                     if not decision.allowed:
                         skipped += 1

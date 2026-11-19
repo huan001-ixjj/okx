@@ -28,10 +28,10 @@ def align_ts(ts: int, interval_ms: int) -> int:
 
 def count_candles(db: Database, inst_id: str, bar: str, start_ts: int, end_ts: int) -> int:
     row = db.execute(
-        "SELECT COUNT(*) FROM candles WHERE inst_id=? AND bar=? AND ts BETWEEN ? AND ?",
+        "SELECT COUNT(*) AS n FROM candles WHERE inst_id=? AND bar=? AND ts BETWEEN ? AND ?",
         (inst_id, bar, start_ts, end_ts),
     ).fetchone()
-    return int(row[0]) if row else 0
+    return int(row["n"]) if row else 0
 
 
 def upsert_candles(
@@ -59,17 +59,17 @@ def upsert_candles(
 
 def latest_ts(db: Database, inst_id: str, bar: str) -> int | None:
     row = db.execute(
-        "SELECT MAX(ts) FROM candles WHERE inst_id=? AND bar=?", (inst_id, bar)
+        "SELECT MAX(ts) AS v FROM candles WHERE inst_id=? AND bar=?", (inst_id, bar)
     ).fetchone()
-    value = row[0] if row else None
+    value = row["v"] if row else None
     return int(value) if value is not None else None
 
 
 def earliest_ts(db: Database, inst_id: str, bar: str) -> int | None:
     row = db.execute(
-        "SELECT MIN(ts) FROM candles WHERE inst_id=? AND bar=?", (inst_id, bar)
+        "SELECT MIN(ts) AS v FROM candles WHERE inst_id=? AND bar=?", (inst_id, bar)
     ).fetchone()
-    value = row[0] if row else None
+    value = row["v"] if row else None
     return int(value) if value is not None else None
 
 
@@ -142,13 +142,14 @@ def find_gaps(
 
 def range_stats(db: Database, inst_id: str, bar: str) -> dict[str, int | None]:
     row = db.execute(
-        "SELECT COUNT(*), MIN(ts), MAX(ts) FROM candles WHERE inst_id=? AND bar=?",
+        "SELECT COUNT(*) AS n, MIN(ts) AS lo, MAX(ts) AS hi "
+        "FROM candles WHERE inst_id=? AND bar=?",
         (inst_id, bar),
     ).fetchone()
     if row is None:
         return {"count": 0, "first_ts": None, "last_ts": None}
     return {
-        "count": int(row[0]),
-        "first_ts": int(row[1]) if row[1] is not None else None,
-        "last_ts": int(row[2]) if row[2] is not None else None,
+        "count": int(row["n"]),
+        "first_ts": int(row["lo"]) if row["lo"] is not None else None,
+        "last_ts": int(row["hi"]) if row["hi"] is not None else None,
     }

@@ -12,7 +12,7 @@ from okxquant.commands._common import load_strategy_with_params, parse_overrides
 from okxquant.config import AppConfig
 from okxquant.context import AppContext, get_app_ctx
 from okxquant.domain import Instrument
-from okxquant.engine.broker import DemoBroker, SimulatedBroker
+from okxquant.engine.broker import DemoBroker, SimulatedBroker, SwapSpec
 from okxquant.engine.live import LiveEngine
 from okxquant.engine.portfolio import Portfolio
 from okxquant.engine.risk import RiskEngine, RiskLimits
@@ -81,10 +81,34 @@ def live_command(
     param: list[str] | None = typer.Option(
         None, "--param", "-p", help="覆盖策略参数，如 --param fast=8"
     ),
+    inst_id: str | None = typer.Option(None, "--inst", help="覆盖配置里的交易对"),
+    bar: str | None = typer.Option(None, "--bar", help="覆盖配置里的 K 线周期"),
+    min_notional: float | None = typer.Option(
+        None, "--min-notional", help="单笔最小金额 USDT（小资金测试时需调低）"
+    ),
 ) -> None:
     """连接 OKX 模拟盘，实时订阅行情并自动交易。"""
     app_ctx = get_app_ctx(ctx)
     cfg = app_ctx.config
+    if min_notional is not None:
+        cfg = cfg.model_copy(
+            update={
+                "risk": cfg.risk.model_copy(update={"min_order_notional": min_notional})
+            }
+        )
+        app_ctx.config = cfg
+    if inst_id or bar:
+        cfg = cfg.model_copy(
+            update={
+                "market": cfg.market.model_copy(
+                    update={
+                        "inst_id": inst_id or cfg.market.inst_id,
+                        "bar": bar or cfg.market.bar,
+                    }
+                )
+            }
+        )
+        app_ctx.config = cfg
     _guard_environment(app_ctx, dry_run=dry_run, accept_real_money=accept_real_money)
 
     spec = strategy or cfg.strategy.name
@@ -124,7 +148,21 @@ def live_command(
     else:
         if rest is None:
             raise CredentialError("无法初始化交易所客户端")
-        broker = DemoBroker(rest, instrument, min_notional=cfg.risk.min_order_notional)
+        swap = None
+        if cfg.market.inst_id.endswith("-SWAP"):
+            # 注意变量名不要与上面的策略标识 spec 重名，否则会覆盖成 dict
+            swap_params = rest.swap_spec(cfg.market.inst_id)
+            swap = SwapSpec(**swap_params)
+            console.print(
+                f"[dim]合约参数：{swap_params['ct_val']:g} 币/张，"
+                f"最小 {swap_params['min_sz']:g} 张[/]"
+            )
+        broker = DemoBroker(
+            rest,
+            instrument,
+            min_notional=cfg.risk.min_order_notional,
+            swap=swap,
+        )
 
     risk = RiskEngine(RiskLimits.from_config(cfg.risk))
 

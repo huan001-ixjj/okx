@@ -1,0 +1,64 @@
+# Render Blueprint：一键部署 okxquant Web 服务（引擎与 Web 同容器，单实例常驻）
+# 部署方式：Render 控制台 -> New -> Blueprint -> 选择本仓库
+#
+# 重要提醒：
+# 1. 必须是「常驻 Web Service」：引擎是子进程，serverless（Vercel/Cloudflare）跑不了。
+# 2. 数据全部落在外部 Postgres（Neon / Supabase / Render Postgres 都行），
+#    所以不挂持久盘，容器重启、重新部署都不丢数据。
+#    连接串填在 OKX_DB_PATH，形如：
+#      postgresql://user:pass@host/db?sslmode=require
+#    Neon 建议用**直连**（非 pooler）串；用 Supabase/pgBouncer 也行，
+#    代码里已关闭自动 prepared statement 以兼容事务池化模式。
+# 3. OKX 对部分云厂商 IP 有风控，region 选 singapore/frankfurt 比默认 oregon 稳；
+#    若 /health 显示引擎反复退出，先看 /logs 里的网络错误。
+# 4. OKX API Key 的 IP 白名单要留空，否则 Render 的动态出口 IP 会被拒（50110）。
+# 5. 首次部署后确认 /health 中 engine.running=true、engine.blocked 为空。
+services:
+  - type: web
+    name: okxquant
+    runtime: python
+    plan: starter
+    region: singapore
+    autoDeploy: true
+    buildCommand: pip install --upgrade pip && pip install -e .
+    startCommand: uvicorn okxquant.web:app --host 0.0.0.0 --port $PORT --proxy-headers
+    healthCheckPath: /health
+    # 给引擎子进程留出优雅退出的时间（收到 SIGTERM 后最多等 30s）
+    maxShutdownDelaySeconds: 30
+    envVars:
+      # 只写 major.minor，由 Render 选它镜像里最新的 3.12.x；
+      # 写死 patch 版本时若镜像没有该版本，构建会直接失败
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # 默认时区相关逻辑（日切、日志轮转）按 UTC 运行，避免容器时区漂移
+      - key: TZ
+        value: "UTC"
+      # --- 数据库：部署时在控制台粘贴 Postgres 连接串（含 ?sslmode=require） ---
+      - key: OKX_DB_PATH
+        sync: false
+      # 引擎 stdout 日志放容器临时盘，只用于 /logs 展示，重启即丢（不是业务数据）
+      - key: OKX_DATA_DIR
+        value: /tmp/okxquant
+      # --- 交易所凭据（模拟盘），在 Render 控制台逐项填写 ---
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
+        sync: false
+      - key: OKX_FLAG
+        value: "1"
+      # --- 引擎参数（可按需覆盖） ---
+      - key: AUTOSTART_ENGINE
+        value: "1"
+      - key: OKX_INST_ID
+        value: "XRP-USDT-SWAP"
+      - key: OKX_BAR
+        value: "15m"
+      - key: OKX_CASH
+        value: "1.5"
+      - key: OKX_MIN_NOTIONAL
+        value: "0.5"
+      # 引擎异常退出的自动重拉上限（0 = 只启动一次，不重拉）
+      - key: OKX_MAX_RESTARTS
+        value: "10"

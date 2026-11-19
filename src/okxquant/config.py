@@ -68,10 +68,13 @@ class MarketConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    db_path: Path = Path("data/quant.db")
+    # 文件路径 → SQLite；postgres:// / postgresql:// → Postgres
+    db_path: str = "data/quant.db"
 
     def ensure_parent(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if str(self.db_path).startswith(("postgres://", "postgresql://")):
+            return
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 class LoggingConfig(BaseModel):
@@ -163,6 +166,12 @@ def load_config(path: Path | None = None) -> AppConfig:
     env_level = os.getenv("OKXQUANT_LOG_LEVEL")
     if env_level:
         logging_raw["level"] = env_level
+
+    storage_raw = raw.setdefault("storage", {})
+    env_db = os.getenv("OKX_DB_PATH")
+    if env_db and env_db.strip():
+        # Render 等云端部署用环境变量指向 Postgres URL
+        storage_raw["db_path"] = env_db.strip()
 
     try:
         return AppConfig.model_validate(raw)

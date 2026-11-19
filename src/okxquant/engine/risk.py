@@ -128,6 +128,7 @@ class RiskEngine:
         notional: float,
         snapshot: AccountSnapshot,
         now_ms: int,
+        allow_short: bool = False,
     ) -> RiskDecision:
         if self._halted:
             return RiskDecision(False, f"已熔断：{self._halt_reason}", halted=True)
@@ -157,8 +158,11 @@ class RiskEngine:
                 f"订单金额 {notional:.2f} 低于最小下单额 {self.limits.min_order_notional:.2f} USDT",
             )
 
-        # 卖出是降低风险的方向，不限制单笔上限与仓位占比
-        if side is Side.BUY:
+        # 只有「增加敞口」的订单才限制金额与仓位：
+        # 买入开多；以及允许做空时的卖出开空。
+        # 卖出平仓是降低风险，不受这两项限制。
+        opens_exposure = side is Side.BUY or allow_short
+        if opens_exposure:
             if notional > self.limits.max_order_notional:
                 return RiskDecision(
                     False,
@@ -166,11 +170,12 @@ class RiskEngine:
                 )
             equity = snapshot.equity
             if equity > 0:
-                projected = (snapshot.position_value + notional) / equity
+                # 用绝对敞口：空头持仓的 position_value 为负，直接相加会低估风险
+                projected = (abs(snapshot.position_value) + notional) / equity
                 if projected > self.limits.max_position_ratio:
                     return RiskDecision(
                         False,
-                        f"买入后持仓占比 {projected:.1%} 超过上限 "
+                        f"开仓后敞口占比 {projected:.1%} 超过上限 "
                         f"{self.limits.max_position_ratio:.0%}",
                     )
 

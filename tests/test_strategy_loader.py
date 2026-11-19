@@ -31,14 +31,14 @@ def test_unknown_strategy_message() -> None:
 
 
 def test_load_user_file() -> None:
-    strategy = build("strategies/ma_cross.py")
-    assert strategy.name == "double_ma_script"
-    assert strategy.param_int("fast") == 12
+    strategy = build("strategies/bollinger_reversion.py")
+    assert strategy.name == "bollinger_reversion"
+    assert strategy.param_int("period") == 40
 
 
-def test_load_user_grid_file() -> None:
-    strategy = build("strategies/grid.py", {"step_pct": 1.0})
-    assert strategy.param_float("step_pct") == 1.0
+def test_load_user_file_with_override() -> None:
+    strategy = build("strategies/bollinger_reversion.py", {"k_entry": 1.5})
+    assert strategy.param_float("k_entry") == 1.5
 
 
 def test_missing_file_raises(tmp_path: Path) -> None:

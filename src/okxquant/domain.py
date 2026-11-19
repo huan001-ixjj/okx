@@ -146,6 +146,9 @@ class Intent:
     quote_qty: float | None = None
     px: float | None = None
     reason: str = ""
+    # 默认 False：卖出只平多，超出持仓部分被截断（现货语义）
+    # 置 True 时允许反手开空（合约语义）
+    allow_short: bool = False
 
     def __post_init__(self) -> None:
         if (self.qty is None) == (self.quote_qty is None):
@@ -230,7 +233,8 @@ class Position:
         return self.qty * price
 
     def unrealized(self, price: float) -> float:
-        if self.qty <= 0:
+        """持仓的浮动盈亏。``qty`` 为负表示空头，价格下跌时为正收益。"""
+        if abs(self.qty) <= 1e-12:
             return 0.0
         return (price - self.avg_cost) * self.qty
 

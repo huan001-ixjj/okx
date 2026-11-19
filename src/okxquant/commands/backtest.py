@@ -49,14 +49,23 @@ def backtest_command(
         None, "--param", "-p", help="覆盖策略参数，如 --param fast=8"
     ),
     risk: bool = typer.Option(False, "--risk", help="启用风控规则（默认关闭，只评估策略本身）"),
+    bar: str | None = typer.Option(
+        None, "--bar", help="K 线周期，默认取配置（如 1m/5m/15m/1H）"
+    ),
+    leverage: float = typer.Option(
+        1.0, "--leverage", "-l", help="杠杆倍数，1 表示现货（不放大）"
+    ),
+    inst_id: str | None = typer.Option(None, "--inst", help="覆盖配置里的交易对"),
 ) -> None:
     """用本地历史 K 线跑回测，输出绩效指标与逐笔成交。"""
     app_ctx = get_app_ctx(ctx)
     cfg = app_ctx.config
 
     spec = strategy or cfg.strategy.name
+    symbol = inst_id or cfg.market.inst_id
+    period = bar or cfg.market.bar
     start_ms, end_ms, interval = resolve_window(
-        cfg, days=days, start=start, end=end, bar=cfg.market.bar
+        cfg, days=days, start=start, end=end, bar=period
     )
     initial_cash = cash if cash is not None else cfg.execution.initial_cash
     fee_rate = fee if fee is not None else cfg.execution.fee_rate
@@ -67,13 +76,11 @@ def backtest_command(
 
     db = Database(cfg.storage.db_path)
     try:
-        available = count_candles(
-            db, cfg.market.inst_id, cfg.market.bar, start_ms, end_ms
-        )
+        available = count_candles(db, symbol, period, start_ms, end_ms)
         if available == 0:
             raise ConfigError(
-                f"区间内没有 K 线数据（{cfg.market.inst_id} {cfg.market.bar}）",
-                hint="先运行 okxquant download --days 7，或用 --synthetic 生成离线演示数据",
+                f"区间内没有 K 线数据（{symbol} {period}）",
+                hint=f"先运行 okxquant download --inst {symbol} --days 7 --bar {period}",
             )
 
         strategy_impl = load_strategy_with_params(cfg, spec, parse_overrides(param))
@@ -105,8 +112,8 @@ def backtest_command(
             result = run_backtest(
                 db=db,
                 strategy=strategy_impl,
-                inst_id=cfg.market.inst_id,
-                bar=cfg.market.bar,
+                inst_id=symbol,
+                bar=period,
                 bar_ms=interval,
                 start_ts=start_ms,
                 end_ts=end_ms,
@@ -117,6 +124,7 @@ def backtest_command(
                 risk=risk_engine,
                 on_progress=on_progress,
                 params=strategy_impl.params,
+                leverage=leverage,
             )
     finally:
         db.close()
@@ -126,7 +134,7 @@ def backtest_command(
             "run_id": result.run_id,
             "strategy": strategy_impl.name,
             "inst_id": cfg.market.inst_id,
-            "bar": cfg.market.bar,
+            "bar": period,
             "metrics": result.metrics.to_dict(),
             "fills": len(result.fills),
             "skipped": result.skipped,
@@ -138,8 +146,8 @@ def backtest_command(
     render_report(
         run_id=result.run_id,
         strategy_name=strategy_impl.name,
-        inst_id=cfg.market.inst_id,
-        bar=cfg.market.bar,
+        inst_id=symbol,
+        bar=period,
         metrics=result.metrics,
         equity=result.equity_series or [p.equity for p in result.equity],
         fills=result.fills,

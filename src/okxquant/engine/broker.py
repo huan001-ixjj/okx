@@ -13,7 +13,7 @@ import itertools
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from loguru import logger
 
@@ -143,8 +143,22 @@ class SimulatedBroker(Broker):
         return 0
 
 
+@dataclass(slots=True)
+class SwapSpec:
+    """永续合约的下单参数。
+
+    与现货最大的区别：``sz`` 的单位是「张」而不是币，且 ``tdMode`` 必须是
+    ``cross``/``isolated``。``ct_val`` 是每张对应的币数量，用来在两者间换算。
+    """
+
+    ct_val: float      # 每张对应的币数量（如 XRP 是 100）
+    min_sz: float      # 最小张数
+    lot_sz: float      # 张数步长
+    tick_sz: float     # 价格最小变动
+
+
 class DemoBroker(Broker):
-    """OKX 模拟盘下单。数量按 lotSz 归一化，价格按 tickSz 归一化。"""
+    """OKX 模拟盘下单。现货按币、永续按张，数量均按交易所精度归一化。"""
 
     def __init__(
         self,
@@ -152,12 +166,14 @@ class DemoBroker(Broker):
         instrument: Instrument,
         *,
         min_notional: float = 10.0,
+        swap: SwapSpec | None = None,
     ) -> None:
         if not rest.has_credentials:
             raise CredentialError("模拟盘下单需要 API 凭据")
         self._rest = rest
         self._instrument = instrument
         self._min_notional = min_notional
+        self._swap = swap
         self._seq = itertools.count(1)
 
     @property
@@ -188,6 +204,21 @@ class DemoBroker(Broker):
         else:
             raw_qty = intent.qty or 0.0
 
+        ref_px = intent.px or price
+        cl_ord_id = self._next_cl_ord_id()
+        ord_type = OrderType.MARKET if intent.is_market else OrderType.LIMIT
+
+        if self._swap is not None:
+            return self._submit_swap(
+                inst_id=inst_id,
+                intent=intent,
+                raw_qty=raw_qty,
+                ref_px=ref_px,
+                cl_ord_id=cl_ord_id,
+                ord_type=ord_type,
+                now_ms=now_ms,
+            )
+
         qty = normalize_qty(raw_qty, self._instrument)
         if qty < self._instrument.min_sz:
             return BrokerResult(
@@ -195,7 +226,6 @@ class DemoBroker(Broker):
                 rejected=True,
             )
 
-        ref_px = intent.px or price
         if qty * Decimal(str(ref_px)) < Decimal(str(self._min_notional)):
             return BrokerResult(
                 error=f"订单金额不足 {self._min_notional} USDT", rejected=True
@@ -204,9 +234,6 @@ class DemoBroker(Broker):
         px_str: str | None = None
         if intent.px is not None:
             px_str = qty_str(normalize_px(intent.px, self._instrument))
-
-        cl_ord_id = self._next_cl_ord_id()
-        ord_type = OrderType.MARKET if intent.is_market else OrderType.LIMIT
 
         try:
             order = self._rest.place_order(
@@ -228,6 +255,72 @@ class DemoBroker(Broker):
             "已提交 {} {} {} @ {}（clOrdId={}）",
             intent.side.value,
             qty_str(qty),
+            inst_id,
+            px_str or "market",
+            cl_ord_id,
+        )
+        return BrokerResult(order=order)
+
+    def _submit_swap(
+        self,
+        *,
+        inst_id: str,
+        intent: Intent,
+        raw_qty: float,
+        ref_px: float,
+        cl_ord_id: str,
+        ord_type: OrderType,
+        now_ms: int,
+    ) -> BrokerResult:
+        """永续下单：把币数量换算成张数，``tdMode`` 用全仓 ``cross``。"""
+        assert self._swap is not None
+        spec = self._swap
+
+        contracts = Decimal(str(raw_qty)) / Decimal(str(spec.ct_val))
+        step = Decimal(str(spec.lot_sz))
+        contracts = (contracts / step).to_integral_value(rounding=ROUND_DOWN) * step
+
+        min_sz = Decimal(str(spec.min_sz))
+        if contracts < min_sz:
+            need = min_sz * Decimal(str(spec.ct_val)) * Decimal(str(ref_px))
+            return BrokerResult(
+                error=f"张数 {contracts} 低于最小 {min_sz} 张（约需 {need:.2f} USDT）",
+                rejected=True,
+            )
+
+        notional = contracts * Decimal(str(spec.ct_val)) * Decimal(str(ref_px))
+        if notional < Decimal(str(self._min_notional)):
+            return BrokerResult(
+                error=f"订单金额 {notional:.2f} USDT 不足 {self._min_notional} USDT",
+                rejected=True,
+            )
+
+        sz_text = format(contracts.normalize(), "f")
+        px_str: str | None = None
+        if intent.px is not None:
+            px_str = qty_str(normalize_px(intent.px, self._instrument))
+
+        try:
+            order = self._rest.place_order(
+                inst_id=inst_id,
+                side=intent.side,
+                ord_type=ord_type,
+                size=sz_text,
+                px=px_str,
+                cl_ord_id=cl_ord_id,
+                td_mode="cross",
+            )
+        except ApiError as exc:
+            logger.error("合约下单被拒绝：{}", exc)
+            return BrokerResult(error=str(exc), rejected=True)
+
+        order.reason = intent.reason
+        order.created_ts = now_ms
+        order.updated_ts = now_ms
+        logger.info(
+            "已提交合约 {} {} 张 {} @ {}（clOrdId={}）",
+            intent.side.value,
+            sz_text,
             inst_id,
             px_str or "market",
             cl_ord_id,

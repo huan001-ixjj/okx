@@ -24,11 +24,17 @@ EPS = 1e-12
 class Portfolio:
     """现金 + 单币种持仓的账本。"""
 
-    def __init__(self, inst_id: str, initial_cash: float) -> None:
+    def __init__(
+        self, inst_id: str, initial_cash: float, *, leverage: float = 1.0
+    ) -> None:
         if initial_cash <= 0:
             raise ValueError("初始资金必须为正数")
+        if leverage <= 0:
+            raise ValueError("杠杆必须为正数")
         self.inst_id = inst_id
         self.initial_cash = initial_cash
+        self.leverage = leverage
+        self.liquidations = 0
         self.cash = initial_cash
         self.position = Position(inst_id=inst_id)
         self.fills: list[Fill] = []
@@ -48,35 +54,86 @@ class Portfolio:
     # 记账
     # ------------------------------------------------------------------ #
     def apply_fill(self, fill: Fill) -> None:
-        cost = fill.qty * fill.px
-        if fill.side is Side.BUY:
-            self.cash -= cost + fill.fee
-            new_qty = self.position.qty + fill.qty
-            if new_qty > EPS:
-                self.position.avg_cost = (
-                    self.position.avg_cost * self.position.qty + cost
-                ) / new_qty
-            self.position.qty = new_qty
+        """支持多空双向持仓：BUY 增仓、SELL 减仓，跨越 0 即反手。
+
+        现货与合约共用这一套记账：``qty`` 为正表示多头、为负表示空头，
+        因此 ``equity = cash + qty * price`` 对空头自动成立（价格下跌则权益上升）。
+        """
+        old_qty = self.position.qty
+        old_avg = self.position.avg_cost
+        old_margin = abs(old_qty) * old_avg / self.leverage
+
+        signed_qty = fill.qty if fill.side is Side.BUY else -fill.qty
+        new_qty = old_qty + signed_qty
+
+        gross = 0.0
+        closed = False
+
+        if abs(old_qty) <= EPS:
+            # 空仓开出新仓
+            self.position.avg_cost = fill.px
+        elif old_qty * new_qty > 0 and abs(new_qty) > abs(old_qty):
+            # 同向加仓：加权平均成本
+            self.position.avg_cost = (old_avg * abs(old_qty) + fill.px * fill.qty) / abs(
+                new_qty
+            )
+        elif old_qty * new_qty > 0:
+            # 同向减仓（部分平仓）
+            closed = True
+            direction = 1.0 if old_qty > 0 else -1.0
+            gross = (fill.px - old_avg) * fill.qty * direction
+        elif abs(new_qty) <= EPS:
+            # 刚好全部平掉
+            closed = True
+            direction = 1.0 if old_qty > 0 else -1.0
+            gross = (fill.px - old_avg) * abs(old_qty) * direction
         else:
-            realized = (fill.px - self.position.avg_cost) * fill.qty - fill.fee
-            self.cash += cost - fill.fee
-            self.position.qty = max(0.0, self.position.qty - fill.qty)
-            if self.position.qty <= EPS:
-                self.position.qty = 0.0
-                self.position.avg_cost = 0.0
-            self.realized += realized
-            self.trade_pnls.append(realized)
+            # 反手：先按旧成本结算全部旧仓，再以新价建反向仓
+            closed = True
+            direction = 1.0 if old_qty > 0 else -1.0
+            gross = (fill.px - old_avg) * abs(old_qty) * direction
+            self.position.avg_cost = fill.px
+
+        if abs(new_qty) <= EPS:
+            self.position.qty = 0.0
+            self.position.avg_cost = 0.0
+        else:
+            self.position.qty = new_qty
+
+        # 保证金模型：现金只被占用「名义/杠杆」，平仓时返还并结算盈亏。
+        # leverage=1 时退化为现货口径，与旧实现完全一致。
+        new_margin = abs(self.position.qty) * self.position.avg_cost / self.leverage
+        self.cash += old_margin - new_margin + gross - fill.fee
+
+        if closed:
+            net = gross - fill.fee
+            self.realized += net
+            self.trade_pnls.append(net)
 
         self.fee_paid += fill.fee
         self.fills.append(fill)
         self.last_price = fill.px
 
+    def _liquidate(self, price: float) -> None:
+        """保证金亏光：强制平仓，本金归零。"""
+        self.cash = 0.0
+        self.position.qty = 0.0
+        self.position.avg_cost = 0.0
+        self.last_price = price
+        self.liquidations += 1
+
     def mark(self, price: float, ts: int = 0) -> AccountSnapshot:
-        """按最新价重估，更新峰值与回撤，返回不可变快照。"""
+        """按最新价重估，更新峰值与回撤，返回不可变快照。
+
+        杠杆下若权益归零则触发爆仓（强平），此后本金不再变化。
+        """
         if price > 0:
             self.last_price = price
 
         equity = self.equity()
+        if equity <= 0 and abs(self.position.qty) > EPS:
+            self._liquidate(self.last_price)
+            equity = self.equity()
         if equity > self.peak_equity:
             self.peak_equity = equity
 
@@ -100,7 +157,7 @@ class Portfolio:
             dd = max(0.0, (self.peak_equity - eq) / self.peak_equity)
 
         return AccountSnapshot(
-            cash=self.cash,
+            cash=self.buying_power,
             position_qty=self.position.qty,
             avg_cost=self.position.avg_cost,
             last_price=self.last_price,
@@ -111,8 +168,23 @@ class Portfolio:
             ts=ts,
         )
 
+    @property
+    def buying_power(self) -> float:
+        """可开仓的购买力 = 可用保证金 × 杠杆。
+
+        策略通过 ``ctx.cash`` 看到的是这个值，因此杠杆会真正放大仓位，
+        而不是仅仅减少保证金占用。``leverage=1`` 时等于现金。
+        """
+        return max(0.0, self.cash) * self.leverage
+
     def equity(self) -> float:
-        return self.cash + self.position.qty * self.last_price
+        """权益 = 可用现金 + 占用保证金 + 浮动盈亏。
+
+        保证金模型下现金只被占用了「名义/杠杆」，因此必须把保证金加回来，
+        否则杠杆交易会被严重低估。``leverage=1`` 时等价于 ``cash + qty*price``。
+        """
+        margin = abs(self.position.qty) * self.position.avg_cost / self.leverage
+        return self.cash + margin + self.position.unrealized(self.last_price)
 
     def record_bar(self, ts: int, price: float) -> EquityPoint:
         """每根 bar 收盘后调用一次，用于曲线与夏普计算。"""
@@ -120,7 +192,7 @@ class Portfolio:
         self._equity_series.append(snap.equity)
         self._equity_ts.append(ts)
         self._total_bars += 1
-        if self.position.qty > 0:
+        if abs(self.position.qty) > EPS:
             self._exposure_bars += 1
         return EquityPoint(
             ts=ts,

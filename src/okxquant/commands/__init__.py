@@ -13,7 +13,6 @@ def register_all(app: typer.Typer) -> None:
         live,
         report,
         strategy_cmd,
-        tunnel_cmd,
     )
 
     info.register(app)
@@ -22,4 +21,3 @@ def register_all(app: typer.Typer) -> None:
     report.register(app)
     strategy_cmd.register(app)
     live.register(app)
-    tunnel_cmd.register(app)

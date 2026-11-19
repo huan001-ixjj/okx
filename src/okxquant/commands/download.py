@@ -178,8 +178,7 @@ def _download_gaps(
     gaps: list[tuple[int, int]],
     interval: int,
 ) -> None:
-    proxy = app_ctx.ensure_proxy()
-    rest = OkxRest(app_ctx.credentials, proxy=proxy)
+    rest = OkxRest(app_ctx.credentials)
     total_expected = sum((end - start) // interval + 1 for start, end in gaps)
 
     progress = Progress(

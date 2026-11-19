@@ -31,9 +31,6 @@ def bootstrap(
     log_level: str | None = typer.Option(
         None, "--log-level", help="覆盖日志级别（DEBUG/INFO/WARNING/ERROR）"
     ),
-    no_tunnel: bool = typer.Option(
-        False, "--no-tunnel", help="禁用 SSH 代理隧道，强制直连（不影响显式代理）"
-    ),
 ) -> None:
     """加载配置并初始化日志，任何子命令执行前完成。"""
     try:
@@ -49,7 +46,6 @@ def bootstrap(
         credentials=credentials,
         config_path=config,
         json_output=json_output,
-        disable_tunnel=no_tunnel,
     )
 
 

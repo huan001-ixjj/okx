@@ -66,7 +66,6 @@ class LiveEngine:
         instrument: Instrument,
         rest: OkxRest | None,
         dry_run: bool,
-        proxy: str | None = None,
         console: Console | None = None,
     ) -> None:
         self.cfg = cfg
@@ -81,7 +80,6 @@ class LiveEngine:
         self.instrument = instrument
         self.rest = rest
         self.dry_run = dry_run
-        self.proxy = proxy
         self.console = console or Console()
 
         self.state = LiveState(
@@ -252,7 +250,6 @@ class LiveEngine:
             url=pub_url,
             subscriptions=public_subscriptions(inst_id, self.cfg.market.bar),
             queue_obj=self._queue,
-            proxy=self.proxy,
         )
         self._public_ws.start()
 
@@ -263,7 +260,6 @@ class LiveEngine:
                 credentials=self.credentials,
                 private=True,
                 queue_obj=self._queue,
-                proxy=self.proxy,
             )
             self._private_ws.start()
 

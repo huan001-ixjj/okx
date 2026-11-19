@@ -48,13 +48,3 @@ name = "ma_cross"
 # 策略参数覆盖，留空则使用 config/strategies/<name>.toml
 params = {}
 
-[network]
-# 网络出口。默认全部留空 = 直连，部署到能直接访问 OKX 的服务器时无需改动。
-# 显式代理（优先级最高），例如 socks5h://127.0.0.1:7890
-proxy = ""
-# SSH 隧道：仅用于无法直连 OKX 的开发机，密码在 .env 的 OKX_TUNNEL_PASSWORD
-tunnel_enabled = false
-tunnel_host = ""
-tunnel_port = 1080
-tunnel_ssh_port = 22
-tunnel_timeout_sec = 20.0

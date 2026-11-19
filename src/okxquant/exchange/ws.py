@@ -72,7 +72,6 @@ class WsBridge:
         debug: bool = False,
         queue_maxsize: int = 20_000,
         queue_obj: queue.Queue[WsEvent] | None = None,
-        proxy: str | None = None,
     ) -> None:
         if private and credentials is None:
             raise CredentialError("私有 WebSocket 需要 API 凭据")
@@ -81,7 +80,6 @@ class WsBridge:
         self._creds = credentials
         self._private = private
         self._debug = debug
-        self._proxy = proxy
 
         # 允许公有/私有共用同一个队列，线程安全
         self.queue: queue.Queue[WsEvent] = queue_obj or queue.Queue(maxsize=queue_maxsize)
@@ -185,10 +183,9 @@ class WsBridge:
         await client.subscribe(self._subscriptions, self._on_message)
         self._connected.set()
         logger.info(
-            "WebSocket 已连接（{}）：{}{}",
+            "WebSocket 已连接（{}）：{}",
             "私有" if self._private else "公有",
             self._url,
-            "（经代理）" if self._proxy else "",
         )
 
         try:
@@ -204,9 +201,9 @@ class WsBridge:
             return await websockets.connect(
                 self._url,
                 ssl=ssl_context,
-                # websockets 的 proxy 默认会读环境变量，必须显式传值：
-                # None 表示直连，socks5h:// 表示经代理（远端解析域名）
-                proxy=self._proxy,
+                # websockets 会默认读取 HTTPS_PROXY 等环境变量；显式传 None
+                # 表示始终直连，避免被外部环境变量意外接管
+                proxy=None,
                 open_timeout=WS_OPEN_TIMEOUT,
                 ping_interval=WS_PING_INTERVAL,
                 ping_timeout=WS_PING_TIMEOUT,
@@ -214,7 +211,7 @@ class WsBridge:
         except Exception as exc:
             raise NetworkError(
                 f"WebSocket 连接失败: {self._url} ({type(exc).__name__}: {exc})",
-                hint="检查网络与代理配置，或运行 okxquant tunnel status",
+                hint="检查网络连通性与防火墙设置",
             ) from exc
 
     def _build_client(self) -> Any:

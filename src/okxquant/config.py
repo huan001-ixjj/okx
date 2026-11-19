@@ -114,33 +114,6 @@ class StrategyConfig(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class NetworkConfig(BaseModel):
-    """网络出口配置。
-
-    默认全部关闭，走直连 —— 部署到能直接访问 OKX 的服务器时不需要任何改动。
-    SSH 隧道只用于开发机这类无法直连的环境，密码不在这里，见 ``tunnel`` 模块。
-    """
-
-    proxy: str = ""
-    tunnel_enabled: bool = False
-    tunnel_host: str = ""
-    tunnel_port: int = Field(default=1080, ge=1, le=65535)
-    tunnel_ssh_port: int = Field(default=22, ge=1, le=65535)
-    tunnel_timeout_sec: float = Field(default=20.0, gt=0, le=120)
-
-    @field_validator("tunnel_host")
-    @classmethod
-    def _check_host(cls, value: str) -> str:
-        text = value.strip()
-        if text and "@" not in text:
-            raise ValueError("tunnel_host 形如 user@host")
-        return text
-
-    @property
-    def has_tunnel(self) -> bool:
-        return self.tunnel_enabled and bool(self.tunnel_host)
-
-
 class AppConfig(BaseModel):
     market: MarketConfig = Field(default_factory=MarketConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
@@ -149,7 +122,6 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
-    network: NetworkConfig = Field(default_factory=NetworkConfig)
 
     @property
     def bar_ms(self) -> int:
@@ -169,13 +141,9 @@ def _read_toml(path: Path) -> dict[str, Any]:
         raise ConfigError(f"配置文件格式错误: {path}\n{exc}") from exc
 
 
-def _as_bool(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def load_config(path: Path | None = None) -> AppConfig:
     """加载 TOML 配置，支持环境变量覆盖少量字段。"""
-    # 先加载 .env，保证其中的网络配置在配置校验阶段就可见
+    # 先加载 .env，让凭据与日志级别在配置校验阶段即可见
     load_dotenv(override=False)
 
     env_path = os.getenv("OKXQUANT_CONFIG")
@@ -195,18 +163,6 @@ def load_config(path: Path | None = None) -> AppConfig:
     env_level = os.getenv("OKXQUANT_LOG_LEVEL")
     if env_level:
         logging_raw["level"] = env_level
-
-    network_raw = raw.setdefault("network", {})
-    for env_name, field_name, caster in (
-        ("OKX_PROXY", "proxy", str),
-        ("OKX_TUNNEL_ENABLED", "tunnel_enabled", _as_bool),
-        ("OKX_TUNNEL_HOST", "tunnel_host", str),
-        ("OKX_TUNNEL_PORT", "tunnel_port", int),
-        ("OKX_TUNNEL_SSH_PORT", "tunnel_ssh_port", int),
-    ):
-        value = os.getenv(env_name)
-        if value is not None and value.strip() != "":
-            network_raw[field_name] = caster(value.strip())
 
     try:
         return AppConfig.model_validate(raw)

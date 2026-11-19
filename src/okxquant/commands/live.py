@@ -99,14 +99,10 @@ def live_command(
     instrument = _default_instrument(cfg.market.inst_id)
     portfolio = Portfolio(cfg.market.inst_id, initial_cash)
 
-    # 即使离线 dry-run 也要按配置解析代理：实时行情走 WebSocket，同样需要它
-    proxy: str | None = app_ctx.ensure_proxy()
     if need_network:
         console.print("[dim]正在初始化交易所连接与交易对精度…[/]")
         try:
-            rest = OkxRest(
-                app_ctx.credentials, timeout=5.0, max_retries=1, proxy=proxy
-            )
+            rest = OkxRest(app_ctx.credentials, timeout=5.0, max_retries=1)
         except Exception as exc:  # 仅影响精度与对账，不阻断启动
             console.print(f"[yellow]初始化 REST 客户端失败：{exc}[/]")
 
@@ -158,7 +154,6 @@ def live_command(
         instrument=instrument,
         rest=rest,
         dry_run=dry_run or app_ctx.credentials is None,
-        proxy=proxy,
         console=console,
     )
 

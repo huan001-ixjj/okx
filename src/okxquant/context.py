@@ -17,22 +17,11 @@ class AppContext:
     credentials: Credentials | None
     config_path: Path | None
     json_output: bool
-    disable_tunnel: bool = False
 
     @property
     def is_offline(self) -> bool:
         """无凭据时只能做数据下载与回测。"""
         return self.credentials is None
-
-    def ensure_proxy(self, *, autostart: bool = True) -> str | None:
-        """按配置返回代理地址；未配置时返回 None（直连）。"""
-        from okxquant.network import resolve_proxy
-
-        return resolve_proxy(
-            self.config.network,
-            autostart=autostart,
-            disable_tunnel=self.disable_tunnel,
-        )
 
 
 def get_app_ctx(ctx: typer.Context) -> AppContext:

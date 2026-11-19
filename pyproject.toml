@@ -13,8 +13,6 @@ dependencies = [
     "pydantic>=2.10.4",
     "pydantic-settings>=2.7.1",
     "python-dotenv>=1.0.1",
-    "httpx[socks]>=0.28.1",
-    "python-socks[asyncio]>=3.2.2",
 ]
 
 [project.scripts]
@@ -44,8 +42,5 @@ ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not integration'"
+addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
-markers = [
-    "integration: 需要真实网络或外部服务，默认不执行（用 -m integration 显式开启）",
-]

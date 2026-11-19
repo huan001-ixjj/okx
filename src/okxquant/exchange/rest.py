@@ -83,13 +83,11 @@ class OkxRest:
         debug: bool = False,
         timeout: float = 10.0,
         max_retries: int = 3,
-        proxy: str | None = None,
     ) -> None:
         self._creds = credentials
         self._debug = debug
         self._timeout = timeout
         self._max_retries = max(1, max_retries)
-        self._proxy = proxy
         self._limiter = RateLimiter(CANDLE_RATE, CANDLE_PERIOD)
 
         if credentials is not None:
@@ -108,7 +106,6 @@ class OkxRest:
             "flag": self._flag,
             "domain": domain,
             "debug": debug,
-            "proxy": proxy,
         }
         self._market = MarketData.MarketAPI(**common)
         self._public = PublicData.PublicAPI(**common)

@@ -12,7 +12,6 @@ from rich.table import Table
 
 from okxquant import __version__
 from okxquant.context import AppContext, get_app_ctx
-from okxquant.network import proxy_status
 
 console = Console()
 
@@ -40,23 +39,6 @@ def _environment_label(app_ctx: AppContext) -> str:
     return "[bold red]LIVE TRADING[/] 实盘（flag=0）"
 
 
-def _network_label(app_ctx: AppContext) -> str:
-    status = proxy_status(app_ctx.config.network)
-    if app_ctx.disable_tunnel and app_ctx.config.network.tunnel_enabled:
-        return "[dim]直连（--no-tunnel 已关闭隧道）[/]"
-
-    mode = status["mode"]
-    if mode == "direct":
-        return "[green]直连[/]"
-    if mode == "proxy":
-        return f"显式代理 [bold]{status['proxy']}[/]"
-    proxy = status["proxy"]
-    if status.get("running"):
-        detail = f"pid {status['pid']}" if status.get("owned") else "外部通道"
-        return f"SSH 隧道 [bold]{proxy}[/] [dim]({detail})[/]"
-    return f"SSH 隧道 [bold]{proxy}[/] [yellow](未运行，联网命令会自动拉起)[/]"
-
-
 def _collect(app_ctx: AppContext) -> dict[str, Any]:
     cfg = app_ctx.config
     db_path = cfg.storage.db_path
@@ -77,8 +59,6 @@ def _collect(app_ctx: AppContext) -> dict[str, Any]:
         "risk": cfg.risk.model_dump(),
         "execution": cfg.execution.model_dump(),
         "strategy": cfg.strategy.name,
-        "network": proxy_status(cfg.network),
-        "tunnel_disabled_by_cli": app_ctx.disable_tunnel,
     }
 
 
@@ -106,7 +86,6 @@ def info_command(ctx: typer.Context) -> None:
     summary.add_row("环境", _environment_label(app_ctx))
     summary.add_row("交易对", f"[bold]{cfg.market.inst_id}[/]  周期 [bold]{cfg.market.bar}[/]")
     summary.add_row("配置文件", str(app_ctx.config_path or "config/default.toml"))
-    summary.add_row("网络", _network_label(app_ctx))
     summary.add_row("数据库", db_state)
     summary.add_row(
         "API Key",

@@ -1,0 +1,35 @@
+# 因子均值回归策略参数（XRP-USDT-SWAP 15m）
+# 依据 scripts/factor_scan.py + factor_backtest.py 的样本内外检验选定
+# 命令行 --param key=value 可覆盖；本文件优先级高于代码 default_params
+
+# ---------------- 打分因子 ----------------
+# z-score 均值窗口（15m 下 50 = 12.5 小时）
+mean_period = 50
+# 入场阈值：z-score 超过该值才反向建仓
+entry_k = 1.5
+# 平仓阈值：z-score 回到该值平仓（0 = 回归均值）
+exit_k = 0.0
+# VWAP 偏离权重（0 = 纯 z-score；当前结论以 z-score 为主）
+vwap_period = 20
+vwap_weight = 0.0
+
+# ---------------- 出场 / 风险 ----------------
+# ATR 止损倍数（0 = 关闭）
+stop_atr_mult = 3.0
+atr_period = 14
+# 每次建仓占用权益比例（30%，满仓复利会失真且回撤大）
+size_pct = 0.3
+
+# ---------------- 方向 ----------------
+# 只做多：XRP 三年牛市样本里裸空均值回归会被强平
+short_enabled = false
+
+# ---------------- 做多趋势过滤（防接飞刀） ----------------
+# 长期均线周期（15m 下 96 = 1 天）
+long_trend_period = 96
+# above=价格在均线上方才做多；rising=均线上行才做多（推荐）
+long_filter_mode = "rising"
+# rising 模式下比较的均线滞后根数（15m 下 24 = 6 小时）
+long_slope_lag = 24
+# 做多持仓跌破长期均线时是否提前平仓
+long_filter_exit = false

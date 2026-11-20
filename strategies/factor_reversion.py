@@ -42,8 +42,8 @@ class FactorReversionStrategy(Strategy):
         "vwap_weight": 0.0,      # VWAP 偏离权重（0 = 纯 z-score）
         "stop_atr_mult": 3.0,    # ATR 止损倍数，0 表示关闭
         "atr_period": 14,
-        "size_pct": 1.0,         # 每次建仓占用权益比例
-        "short_enabled": True,   # 是否允许做空（牛市里做空均值回归风险极大）
+        "size_pct": 0.3,         # 每次建仓占用权益比例（推荐 0.3，满仓复利会失真且回撤大）
+        "short_enabled": False,  # 是否允许做空（XRP 牛市样本里裸空会被强平，默认只做多）
         "short_trend_period": 288,  # 做空趋势过滤：仅在 close < SMA(该周期) 时做空（0=不过滤）
         "long_trend_period": 96,    # 做多趋势过滤周期（0=不过滤）；15m 下 96=1 天
         "long_filter_exit": False,  # 做多持仓跌破长期均线时是否提前平仓
@@ -68,7 +68,7 @@ class FactorReversionStrategy(Strategy):
         self._trend: deque[float] = deque(maxlen=tp) if tp > 0 else deque(maxlen=1)
         self._trend_sum = 0.0
 
-        ltp = self.param_int("long_trend_period", 288)
+        ltp = self.param_int("long_trend_period", 96)
         self._long_trend: deque[float] = deque(maxlen=ltp) if ltp > 0 else deque(maxlen=1)
         self._long_trend_sum = 0.0
         self._long_ma_hist: deque[float] = deque(maxlen=64)

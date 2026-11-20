@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -41,7 +42,9 @@ def _environment_label(app_ctx: AppContext) -> str:
 
 def _collect(app_ctx: AppContext) -> dict[str, Any]:
     cfg = app_ctx.config
-    db_path = cfg.storage.db_path
+    db_path = str(cfg.storage.db_path)
+    # db_path 可能是 SQLite 文件路径，也可能是 postgres:// URL；后者没有本地文件
+    local = Path(db_path) if not db_path.startswith(("postgres://", "postgresql://")) else None
     return {
         "version": __version__,
         "environment": (
@@ -52,9 +55,11 @@ def _collect(app_ctx: AppContext) -> dict[str, Any]:
         "inst_id": cfg.market.inst_id,
         "bar": cfg.market.bar,
         "config_path": str(app_ctx.config_path or "config/default.toml"),
-        "db_path": str(db_path),
-        "db_exists": db_path.exists(),
-        "db_size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+        "db_path": db_path,
+        "db_exists": local.exists() if local is not None else True,
+        "db_size_bytes": (
+            local.stat().st_size if local is not None and local.exists() else 0
+        ),
         "credentials": app_ctx.credentials.masked() if app_ctx.credentials else None,
         "risk": cfg.risk.model_dump(),
         "execution": cfg.execution.model_dump(),

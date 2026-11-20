@@ -43,7 +43,10 @@ def backtest_command(
     start: str | None = typer.Option(None, "--start", help="起始时间，如 2026-11-01"),
     end: str | None = typer.Option(None, "--end", help="结束时间，默认当前时间"),
     cash: float | None = typer.Option(None, "--cash", help="初始资金 USDT"),
-    fee: float | None = typer.Option(None, "--fee", help="手续费率，如 0.0008"),
+    fee: float | None = typer.Option(None, "--fee", help="手续费率（吃单），如 0.0005"),
+    maker_fee: float | None = typer.Option(
+        None, "--maker-fee", help="挂单费率（限价单按此计费），如 0.0002；缺省同 --fee"
+    ),
     slippage: float | None = typer.Option(None, "--slippage", help="滑点，单位 bp"),
     param: list[str] | None = typer.Option(
         None, "--param", "-p", help="覆盖策略参数，如 --param fast=8"
@@ -56,6 +59,11 @@ def backtest_command(
         1.0, "--leverage", "-l", help="杠杆倍数，1 表示现货（不放大）"
     ),
     inst_id: str | None = typer.Option(None, "--inst", help="覆盖配置里的交易对"),
+    delay: int | None = typer.Option(
+        None,
+        "--delay",
+        help="成交延迟根数：1=下一根开盘成交；缺省取策略参数 execution_delay",
+    ),
 ) -> None:
     """用本地历史 K 线跑回测，输出绩效指标与逐笔成交。"""
     app_ctx = get_app_ctx(ctx)
@@ -87,6 +95,10 @@ def backtest_command(
         risk_engine = (
             RiskEngine(RiskLimits.from_config(cfg.risk)) if risk else None
         )
+        # 未显式指定 --delay 时沿用策略自带口径（趋势回调策略要求下一根开盘成交）
+        execution_delay = delay
+        if execution_delay is None:
+            execution_delay = int(strategy_impl.param("execution_delay", 0) or 0)
 
         expected_bars = max(1, (end_ms - start_ms) // interval + 1)
         progress = Progress(
@@ -125,6 +137,8 @@ def backtest_command(
                 on_progress=on_progress,
                 params=strategy_impl.params,
                 leverage=leverage,
+                execution_delay=execution_delay,
+                maker_fee_rate=maker_fee,
             )
     finally:
         db.close()

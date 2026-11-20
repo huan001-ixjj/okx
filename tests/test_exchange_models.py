@@ -44,6 +44,26 @@ def test_parse_candles_sorts_ascending() -> None:
     assert candles[1].confirm is True
 
 
+def test_parse_candles_keeps_volume_calibers() -> None:
+    rows = [
+        [
+            "1700000060000",
+            "0.99",
+            "1.00",
+            "0.98",
+            "0.995",
+            "20160.82",
+            "2016082",
+            "1998684.01",
+            "1",
+        ]
+    ]
+    candle = parse_candles(rows)[0]
+    assert candle.volume == 20160.82  # 张
+    assert candle.volume_ccy == 2016082.0  # 标的币
+    assert candle.volume_quote == 1998684.01  # USDT
+
+
 def test_parse_candles_skips_malformed() -> None:
     rows = [["1", "2"], ["1700000060000", "99", "100", "98", "99.5", "1.1"]]
     candles = parse_candles(rows)

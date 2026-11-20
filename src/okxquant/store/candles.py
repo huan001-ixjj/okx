@@ -8,14 +8,17 @@ from okxquant.domain import Candle
 from okxquant.store import BATCH_SIZE, READ_BATCH, Database
 
 UPSERT_SQL = """
-INSERT INTO candles (inst_id, bar, ts, open, high, low, close, volume)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO candles
+    (inst_id, bar, ts, open, high, low, close, volume, volume_ccy, volume_quote)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(inst_id, bar, ts) DO UPDATE SET
     open = excluded.open,
     high = excluded.high,
     low  = excluded.low,
     close = excluded.close,
-    volume = excluded.volume
+    volume = excluded.volume,
+    volume_ccy = excluded.volume_ccy,
+    volume_quote = excluded.volume_quote
 """
 
 
@@ -47,7 +50,19 @@ def upsert_candles(
     before = count_candles(db, inst_id, bar, start_ts, end_ts)
 
     rows = [
-        (inst_id, bar, c.ts, c.open, c.high, c.low, c.close, c.volume) for c in items
+        (
+            inst_id,
+            bar,
+            c.ts,
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+            c.volume,
+            c.volume_ccy,
+            c.volume_quote,
+        )
+        for c in items
     ]
     with db.transaction() as conn:
         for offset in range(0, len(rows), BATCH_SIZE):
@@ -85,8 +100,9 @@ def iter_candles(
     cursor_ts = start_ts - 1
     while True:
         rows = db.execute(
-            "SELECT ts, open, high, low, close, volume FROM candles "
-            "WHERE inst_id=? AND bar=? AND ts > ? AND ts <= ? ORDER BY ts LIMIT ?",
+            "SELECT ts, open, high, low, close, volume, volume_ccy, volume_quote "
+            "FROM candles WHERE inst_id=? AND bar=? AND ts > ? AND ts <= ? "
+            "ORDER BY ts LIMIT ?",
             (inst_id, bar, cursor_ts, end_ts, batch),
         ).fetchall()
         if not rows:
@@ -100,6 +116,8 @@ def iter_candles(
                 low=float(r["low"]),
                 close=float(r["close"]),
                 volume=float(r["volume"]),
+                volume_ccy=float(r["volume_ccy"] or 0.0),
+                volume_quote=float(r["volume_quote"] or 0.0),
                 confirm=True,
             )
             for r in rows

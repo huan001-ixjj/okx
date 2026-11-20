@@ -43,6 +43,48 @@ class SMA:
         return self._value
 
 
+class VolumeMA:
+    """成交量均线，基准**不含当前 K 线**。
+
+    用法固定为「先读 ``value`` 判断放量，再 ``update`` 并入当前量」::
+
+        base = vol_ma.value                      # 前 period 根的均值
+        if candle.volume_quote >= 1.2 * base: ...
+        vol_ma.update(candle.volume_quote)
+
+    这样当前放量不会抬高自己的基准（方案 §5.1 D.5 的要求）。
+    """
+
+    __slots__ = ("_buf", "_period", "_sum")
+
+    def __init__(self, period: int = 20) -> None:
+        if period <= 0:
+            raise ValueError("period 必须为正整数")
+        self._period = period
+        self._buf: deque[float] = deque(maxlen=period)
+        self._sum = 0.0
+
+    @property
+    def value(self) -> float | None:
+        """前 period 根（不含当前）的均值；数据不足返回 None。"""
+        if len(self._buf) < self._period:
+            return None
+        return self._sum / self._period
+
+    @property
+    def ready(self) -> bool:
+        return self.value is not None
+
+    def update(self, volume: float) -> float | None:
+        """并入当前 K 线的成交量，返回「当前这根应使用的基准」（即并入前的均值）。"""
+        base = self.value
+        if len(self._buf) == self._period:
+            self._sum -= self._buf[0]
+        self._buf.append(volume)
+        self._sum += volume
+        return base
+
+
 class EMA:
     """指数移动平均，首值用前 period 根的算术均值播种。"""
 
@@ -127,6 +169,53 @@ class RSI:
         return self.value
 
 
+class MACD:
+    """MACD：DIF = EMA(fast) − EMA(slow)，DEA = EMA(signal, DIF)，柱 = DIF − DEA。"""
+
+    __slots__ = ("_dea", "_dif", "_fast", "_hist", "_slow")
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9) -> None:
+        if fast <= 0 or slow <= 0 or signal <= 0:
+            raise ValueError("周期必须为正整数")
+        if fast >= slow:
+            raise ValueError("fast 必须小于 slow")
+        self._fast = EMA(fast)
+        self._slow = EMA(slow)
+        self._dea = EMA(signal)
+        self._dif: float | None = None
+        self._hist: float | None = None
+
+    @property
+    def dif(self) -> float | None:
+        return self._dif
+
+    @property
+    def dea(self) -> float | None:
+        return self._dea.value
+
+    @property
+    def hist(self) -> float | None:
+        return self._hist
+
+    @property
+    def ready(self) -> bool:
+        return self._dif is not None and self._dea.value is not None
+
+    def update(self, close: float) -> tuple[float | None, float | None, float | None]:
+        fast = self._fast.update(close)
+        slow = self._slow.update(close)
+        if fast is None or slow is None:
+            return None, None, None
+        self._dif = fast - slow
+        # DIF 就绪后才开始喂 DEA，避免用早期不完整的 DIF 污染信号线
+        dea = self._dea.update(self._dif)
+        if dea is None:
+            self._hist = None
+            return self._dif, None, None
+        self._hist = self._dif - dea
+        return self._dif, dea, self._hist
+
+
 class ATR:
     """平均真实波幅，Wilder 平滑。"""
 
@@ -169,6 +258,143 @@ class ATR:
             n = self._period
             self._avg = (self._avg * (n - 1) + tr) / n
         return self._avg
+
+
+class ADX:
+    """平均趋向指数（Wilder 平滑），与 TA-Lib / TradingView 口径一致。
+
+    TR、+DM、−DM 先做 Wilder 平滑（首值为前 period 根之和，之后
+    ``prev - prev/n + x``），``+DI = 100·平滑+DM / 平滑TR``，
+    ``DX = 100·|+DI − −DI| / (+DI + −DI)``，ADX 为 DX 的 Wilder 均值。
+
+    ADX 只衡量趋势强度、不含方向；方向请用 :attr:`direction` 或 +DI/−DI 比较。
+    """
+
+    __slots__ = (
+        "_adx",
+        "_avg_minus",
+        "_avg_plus",
+        "_avg_tr",
+        "_count",
+        "_dxs",
+        "_minus_di",
+        "_period",
+        "_plus_di",
+        "_prev_close",
+        "_prev_high",
+        "_prev_low",
+        "_seed_minus",
+        "_seed_plus",
+        "_seed_tr",
+    )
+
+    def __init__(self, period: int = 14) -> None:
+        if period <= 1:
+            raise ValueError("period 必须大于 1")
+        self._period = period
+        self._prev_close: float | None = None
+        self._prev_high: float | None = None
+        self._prev_low: float | None = None
+        self._seed_tr = 0.0
+        self._seed_plus = 0.0
+        self._seed_minus = 0.0
+        self._count = 0
+        self._avg_tr: float | None = None
+        self._avg_plus: float | None = None
+        self._avg_minus: float | None = None
+        self._dxs: deque[float] = deque(maxlen=period)
+        self._adx: float | None = None
+        self._plus_di: float | None = None
+        self._minus_di: float | None = None
+
+    @property
+    def value(self) -> float | None:
+        return self._adx
+
+    @property
+    def adx(self) -> float | None:
+        return self._adx
+
+    @property
+    def plus_di(self) -> float | None:
+        return self._plus_di
+
+    @property
+    def minus_di(self) -> float | None:
+        return self._minus_di
+
+    @property
+    def direction(self) -> int:
+        """+1 多头主导 / −1 空头主导 / 0 数据不足或两线持平。"""
+        if self._plus_di is None or self._minus_di is None:
+            return 0
+        if self._plus_di > self._minus_di:
+            return 1
+        if self._plus_di < self._minus_di:
+            return -1
+        return 0
+
+    @property
+    def ready(self) -> bool:
+        return self._adx is not None
+
+    def update(self, candle: Candle) -> float | None:
+        high, low, close = candle.high, candle.low, candle.close
+        if self._prev_close is None:
+            self._prev_high = high
+            self._prev_low = low
+            self._prev_close = close
+            return None
+
+        assert self._prev_high is not None and self._prev_low is not None
+        tr = max(high - low, abs(high - self._prev_close), abs(low - self._prev_close))
+        up = high - self._prev_high
+        down = self._prev_low - low
+        plus_dm = up if up > down and up > 0.0 else 0.0
+        minus_dm = down if down > up and down > 0.0 else 0.0
+
+        self._prev_high = high
+        self._prev_low = low
+        self._prev_close = close
+
+        n = self._period
+        if self._avg_tr is None:
+            self._seed_tr += tr
+            self._seed_plus += plus_dm
+            self._seed_minus += minus_dm
+            self._count += 1
+            if self._count < n:
+                return None
+            self._avg_tr = self._seed_tr
+            self._avg_plus = self._seed_plus
+            self._avg_minus = self._seed_minus
+        else:
+            self._avg_tr = self._avg_tr - self._avg_tr / n + tr
+            self._avg_plus = self._avg_plus - self._avg_plus / n + plus_dm
+            self._avg_minus = self._avg_minus - self._avg_minus / n + minus_dm
+
+        assert self._avg_tr is not None
+        assert self._avg_plus is not None
+        assert self._avg_minus is not None
+
+        if self._avg_tr <= 0.0:
+            self._plus_di = 0.0
+            self._minus_di = 0.0
+            dx = 0.0
+        else:
+            self._plus_di = 100.0 * self._avg_plus / self._avg_tr
+            self._minus_di = 100.0 * self._avg_minus / self._avg_tr
+            total = self._plus_di + self._minus_di
+            dx = 100.0 * abs(self._plus_di - self._minus_di) / total if total > 0 else 0.0
+
+        if self._adx is None:
+            self._dxs.append(dx)
+            if len(self._dxs) < n:
+                return None
+            self._adx = sum(self._dxs) / n
+        else:
+            self._adx = (self._adx * (n - 1) + dx) / n
+        return self._adx
 
 
 class Bollinger:

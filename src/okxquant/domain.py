@@ -72,7 +72,12 @@ class Candle:
     high: float
     low: float
     close: float
+    # 永续为「张」数，现货为币量。跨年份不可比，仅作原始留痕
     volume: float
+    # 成交量（标的币计，如 XRP）；永续 = volume × ctVal
+    volume_ccy: float = 0.0
+    # 成交量（计价币计，如 USDT）；量能过滤应使用此口径，价格变化后仍可比
+    volume_quote: float = 0.0
     confirm: bool = True
 
     @classmethod
@@ -85,6 +90,8 @@ class Candle:
             low=float(row[3]),
             close=float(row[4]),
             volume=float(row[5]),
+            volume_ccy=float(row[6]) if len(row) > 6 and str(row[6]) else 0.0,
+            volume_quote=float(row[7]) if len(row) > 7 and str(row[7]) else 0.0,
             confirm=len(row) > 8 and str(row[8]) == "1",
         )
 
@@ -149,6 +156,12 @@ class Intent:
     # 默认 False：卖出只平多，超出持仓部分被截断（现货语义）
     # 置 True 时允许反手开空（合约语义）
     allow_short: bool = False
+    # 保护价（可选）。以「信号时可见的价格」为基准给出，执行层按实际成交价
+    # 平移后挂单，避免下一根开盘价与信号收盘价之差带来的偏差。
+    stop_px: float | None = None
+    take_px: float | None = None
+    # 挂单有效期（根）：限价单未成交时最多等几根，避免陈旧委托长期挂着
+    ttl_bars: int = 1
 
     def __post_init__(self) -> None:
         if (self.qty is None) == (self.quote_qty is None):
@@ -159,6 +172,10 @@ class Intent:
             raise ValueError("quote_qty 必须为正数")
         if self.px is not None and self.px <= 0:
             raise ValueError("px 必须为正数")
+        if self.stop_px is not None and self.stop_px <= 0:
+            raise ValueError("stop_px 必须为正数")
+        if self.take_px is not None and self.take_px <= 0:
+            raise ValueError("take_px 必须为正数")
 
     @property
     def is_market(self) -> bool:

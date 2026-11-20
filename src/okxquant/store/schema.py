@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Postgres 建表锁：Web 与引擎是两个进程，冷启动时可能同时建表
 PG_MIGRATE_LOCK = 0x6F6B7871  # "okxq"
+
+# v2 给 candles 补的量能列：(列名, SQLite 声明, Postgres 声明)
+# 老库升级与新建表共用这一份定义，避免两边漂移
+CANDLE_VOLUME_COLUMNS = (
+    ("volume_ccy", "REAL NOT NULL DEFAULT 0", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+    ("volume_quote", "REAL NOT NULL DEFAULT 0", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+)
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -30,6 +37,8 @@ CREATE TABLE IF NOT EXISTS candles (
     low     REAL    NOT NULL,
     close   REAL    NOT NULL,
     volume  REAL    NOT NULL,
+    volume_ccy   REAL NOT NULL DEFAULT 0,
+    volume_quote REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (inst_id, bar, ts)
 ) WITHOUT ROWID;
 
@@ -126,6 +135,8 @@ CREATE TABLE IF NOT EXISTS candles (
     low     DOUBLE PRECISION NOT NULL,
     close   DOUBLE PRECISION NOT NULL,
     volume  DOUBLE PRECISION NOT NULL,
+    volume_ccy   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    volume_quote DOUBLE PRECISION NOT NULL DEFAULT 0,
     PRIMARY KEY (inst_id, bar, ts)
 );
 
@@ -199,8 +210,21 @@ CREATE TABLE IF NOT EXISTS risk_events (
 """
 
 
+def ensure_candle_columns(conn, backend: str = "sqlite") -> None:
+    """给已存在的 candles 表补齐后续版本新增的量能列（幂等）。"""
+    if backend == "postgres":
+        for name, _, pg_decl in CANDLE_VOLUME_COLUMNS:
+            conn.execute(f"ALTER TABLE candles ADD COLUMN IF NOT EXISTS {name} {pg_decl}")
+        return
+
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(candles)").fetchall()}
+    for name, sqlite_decl, _ in CANDLE_VOLUME_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE candles ADD COLUMN {name} {sqlite_decl}")
+
+
 def migrate(conn: sqlite3.Connection, backend: str = "sqlite") -> None:
-    """创建缺失的表并记录 schema 版本。"""
+    """创建缺失的表、补齐新增列，并记录 schema 版本。"""
     if backend == "postgres":
         # 事务级 advisory lock：并发建表时串行化，提交/回滚后自动释放
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (PG_MIGRATE_LOCK,))
@@ -208,6 +232,7 @@ def migrate(conn: sqlite3.Connection, backend: str = "sqlite") -> None:
             for stmt in PG_DDL.split(";"):
                 if stmt.strip():
                     conn.execute(stmt)
+            ensure_candle_columns(conn, backend)
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES('schema_version', %s) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -219,6 +244,7 @@ def migrate(conn: sqlite3.Connection, backend: str = "sqlite") -> None:
             raise
         return
     conn.executescript(DDL)
+    ensure_candle_columns(conn, backend)
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

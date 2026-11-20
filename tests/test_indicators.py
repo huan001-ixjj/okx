@@ -4,7 +4,18 @@ from __future__ import annotations
 
 import pytest
 
-from okxquant.indicators import ATR, EMA, RSI, SMA, Bollinger, Donchian, Window
+from okxquant.indicators import (
+    ADX,
+    ATR,
+    EMA,
+    MACD,
+    RSI,
+    SMA,
+    Bollinger,
+    Donchian,
+    VolumeMA,
+    Window,
+)
 from tests.conftest import make_candles
 
 
@@ -102,3 +113,90 @@ class TestWindow:
         assert win.values == (2.0, 3.0, 4.0)
         assert win.last == 4.0
         assert len(win) == 3
+
+
+class TestVolumeMA:
+    def test_base_excludes_current_bar(self) -> None:
+        vol = VolumeMA(3)
+        assert vol.value is None
+        assert vol.update(1.0) is None
+        assert vol.update(2.0) is None
+        assert vol.update(3.0) is None
+        # 前 3 根（1,2,3）的均值是 2.0，作为第 4 根的基准
+        assert vol.value == pytest.approx(2.0)
+        assert vol.update(6.0) == pytest.approx(2.0)
+        assert vol.value == pytest.approx((2 + 3 + 6) / 3)
+
+    def test_rejects_zero_period(self) -> None:
+        with pytest.raises(ValueError):
+            VolumeMA(0)
+
+
+class TestMACD:
+    def test_flat_series_gives_zero(self) -> None:
+        macd = MACD(3, 6, 3)
+        for _ in range(12):
+            dif, dea, hist = macd.update(100.0)
+        assert dif == pytest.approx(0.0)
+        assert dea == pytest.approx(0.0)
+        assert hist == pytest.approx(0.0)
+        assert macd.ready
+
+    def test_uptrend_has_positive_dif(self) -> None:
+        macd = MACD(3, 6, 3)
+        for i in range(1, 20):
+            dif, _, _ = macd.update(float(i) * 10)
+        assert dif is not None and dif > 0
+
+    def test_not_ready_before_slow_period(self) -> None:
+        macd = MACD(12, 26, 9)
+        for i in range(1, 20):
+            assert macd.update(float(i)) == (None, None, None)
+
+    def test_rejects_fast_ge_slow(self) -> None:
+        with pytest.raises(ValueError):
+            MACD(26, 12, 9)
+
+
+class TestADX:
+    def test_uptrend_is_strong_and_positive(self) -> None:
+        adx = ADX(14)
+        candles = make_candles([100.0 + i for i in range(50)], spread=0.002)
+        value = None
+        for candle in candles:
+            value = adx.update(candle)
+        assert value is not None
+        assert adx.ready
+        assert value > 50.0
+        assert adx.direction == 1
+        assert adx.minus_di == pytest.approx(0.0)
+
+    def test_downtrend_direction_negative(self) -> None:
+        adx = ADX(14)
+        candles = make_candles([200.0 - i for i in range(50)], spread=0.002)
+        for candle in candles:
+            adx.update(candle)
+        assert adx.ready
+        assert adx.direction == -1
+        assert adx.plus_di == pytest.approx(0.0)
+
+    def test_flat_series_has_zero_adx(self) -> None:
+        adx = ADX(5)
+        candles = make_candles([100.0] * 20, spread=0.0)
+        value = None
+        for candle in candles:
+            value = adx.update(candle)
+        assert value == pytest.approx(0.0)
+        assert adx.plus_di == pytest.approx(0.0)
+        assert adx.minus_di == pytest.approx(0.0)
+
+    def test_not_ready_before_two_periods(self) -> None:
+        adx = ADX(14)
+        candles = make_candles([100.0 + i for i in range(20)], spread=0.002)
+        for candle in candles:
+            assert adx.update(candle) is None
+        assert not adx.ready
+
+    def test_rejects_small_period(self) -> None:
+        with pytest.raises(ValueError):
+            ADX(1)

@@ -1,0 +1,103 @@
+# XRP Trend Pullback V1.0 参数
+# 对应 XRP_Trend_Pullback_V1.0_完整实施方案.md 附录A + 第4/5/6/8章可量化项
+# 命令行 --param key=value 可覆盖这里的值
+# 注意：这些是研究初始值，未经样本外验证前不得视为有效参数
+
+# ---------------- 周期 ----------------
+# 信号周期（入场判断）
+entry_bar = "5m"
+# 趋势周期（市场状态识别）
+trend_bar = "15m"
+# 成交口径：1 = 信号收盘后下一根开盘成交（方案 §5 要求，禁止当根收盘成交）
+execution_delay = 1
+
+# ---------------- 15m 市场状态 ----------------
+# 15m 趋势均线（快/慢）
+ema_trend_fast = 50
+ema_trend_slow = 200
+# ADX 周期与趋势强度阈值（候选 15/20/25/30）
+adx_period = 14
+adx_min = 20.0
+
+# ---------------- 5m 信号 ----------------
+# 回调参考均线与中期趋势过滤
+ema_fast = 20
+ema_slow = 50
+# RSI 动能
+rsi_period = 14
+rsi_long_min = 50.0
+rsi_short_max = 50.0
+# MACD 动能
+macd_fast = 12
+macd_slow = 26
+macd_signal = 9
+
+# ---------------- 回调识别 ----------------
+# 价格进入 EMA20 附近区域的 ATR 距离上限
+pullback_atr_distance = 0.3
+# 回调标记有效期（5m 根数，候选 6/9/12），过期必须重置
+pullback_valid_bars = 9
+# 有效跌破/突破 EMA50 的 ATR 缓冲（0 表示只看收盘价穿越）
+ema50_break_atr = 0.2
+
+# ---------------- 入场方式 ----------------
+# limit：在 EMA20 附近挂限价等回撤（V1.1 默认，避免追段末端的确认K线）
+# market：确认K线收盘后市价追单（V1.0 行为，实测 18/19 笔被止损）
+entry_mode = "limit"
+# 挂单价 = EMA20 ± offset × ATR
+limit_atr_offset = 0.05
+# 挂单有效根数，未成交则撤单
+limit_ttl_bars = 3
+
+# ---------------- 量能 ----------------
+# 成交量均线周期（不含当前K线）
+volume_ma_period = 20
+# 放量倍数（候选 1.0/1.2/1.5）
+volume_multiplier = 1.2
+
+# ---------------- 出场 ----------------
+# ATR 周期
+atr_period = 14
+# 兜底止损 = stop_atr_mult × ATR（结构位不可用时）
+stop_atr_mult = 1.5
+# 结构位止损：回调区间极值外侧的 ATR 缓冲
+stop_structural_atr = 0.2
+# 止损距离的 ATR 上下限，避免结构位过远（亏损过大）或过近（被噪声打掉）
+stop_min_atr = 1.2
+stop_max_atr = 3.0
+# 止盈 = take_profit_r × 止损距离（候选 1.5/2.0/2.5/3.0）
+take_profit_r = 2.0
+
+# ---------------- 风险 ----------------
+# 单笔风险占账户权益比例
+risk_per_trade = 0.005
+# 单日最大亏损比例（按日初权益）
+max_daily_loss_pct = 0.02
+# 连续亏损熔断笔数
+max_consecutive_losses = 3
+# 最大同时持仓
+max_open_positions = 1
+# 止损后冷却（5m 根数）
+cooldown_bars_after_stop = 3
+# 止盈后冷却（5m 根数）
+cooldown_bars_after_tp = 1
+# 杠杆上限（仅影响保证金占用，不改变风险预算）
+leverage_cap = 2.0
+
+# ---------------- 合约规格 ----------------
+# XRP-USDT-SWAP：1 张 = 100 XRP，最小 1 张、步长 1 张（以接口 ctVal 为准）
+# 实盘应改成启动时从 /api/v5/public/instruments 读取，不要长期写死
+ct_val = 100
+lot_sz = 1
+min_sz = 1
+
+# ---------------- 波动率过滤 ----------------
+# ATR 占价格比例下限：低于此值时 1R 太窄，手续费+滑点会吃掉大部分风险预算
+# 实测 XRP 5m ATR% 中位 0.294%、p10 仅 0.121%：0.20% 以下成本约占 1R 的 47%~77%
+atr_percent_min = 0.0020
+# ATR 占比分位数的滚动窗口（5m 根数）
+atr_percentile_window = 500
+# 低于该分位不做：低波动期成本占 1R 比重过高（近半年中位 32.5%）
+atr_percentile_min = 0.40
+# 高于该分位时暂停新开仓（极端波动）
+atr_percentile_cap = 0.95

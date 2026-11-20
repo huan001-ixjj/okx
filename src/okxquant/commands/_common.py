@@ -92,16 +92,20 @@ def _auto_type(value: str) -> Any:
 def load_strategy_with_params(
     cfg: AppConfig, spec: str, overrides: dict[str, Any] | None = None
 ) -> Strategy:
-    """按优先级合并参数：内置参数文件 < 全局配置 < 命令行覆盖。"""
+    """按优先级合并参数：参数文件 < 全局配置 < 命令行覆盖。
+
+    参数文件按策略名（``trend_pullback``）或文件主名
+    （``strategies/trend_pullback.py``）匹配 ``config/strategies/<name>.toml``，
+    这样自定义策略文件也能用 TOML 调参，而不必改代码里的默认值。
+    """
     params: dict[str, Any] = {}
-    if not spec.endswith(".py") and "/" not in spec:
-        param_file = Path("config/strategies") / f"{spec}.toml"
-        if param_file.exists():
-            try:
-                with param_file.open("rb") as fh:
-                    params.update(tomllib.load(fh))
-            except tomllib.TOMLDecodeError as exc:
-                raise ConfigError(f"策略参数文件格式错误 {param_file}: {exc}") from exc
+    param_file = Path("config/strategies") / f"{Path(spec).stem}.toml"
+    if param_file.exists():
+        try:
+            with param_file.open("rb") as fh:
+                params.update(tomllib.load(fh))
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"策略参数文件格式错误 {param_file}: {exc}") from exc
 
     params.update(cfg.strategy.params)
     if overrides:
